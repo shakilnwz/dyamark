@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=dyamark
+Comment=Fast Markdown viewer and editor with native Mermaid sequence diagrams
+Exec=dyamark %F
+Icon=dyamark
+Terminal=false
+Type=Application
+Categories=Utility;TextEditor;Development;
+MimeType=text/markdown;text/x-markdown;
+StartupWMClass=dyamark
+Keywords=markdown;mermaid;sequence;diagram;editor;viewer;

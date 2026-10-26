@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+mkdir -p "$ROOT_DIR/build"
+
+# Ensure ~/.local/include is in C_INCLUDE_PATH for Vulkan headers
+export C_INCLUDE_PATH="${C_INCLUDE_PATH:-}${C_INCLUDE_PATH:+:}$HOME/.local/include"
+
+echo "==> Building dyamark..."
+cd "$ROOT_DIR"
+go build -trimpath -ldflags "-s -w -X gioui.org/app.ID=dyamark" -o "$ROOT_DIR/build/dyamark" .
+
+BINARY_SIZE="$(du -h "$ROOT_DIR/build/dyamark" | cut -f1)"
+echo "==> Built build/dyamark (${BINARY_SIZE})"

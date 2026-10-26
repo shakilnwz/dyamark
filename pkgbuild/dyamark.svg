@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#161826"/>
+      <stop offset="100%" stop-color="#0a0b12"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8ba0ff"/>
+      <stop offset="100%" stop-color="#7186fd"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)" stroke="url(#accent)" stroke-width="2.5"/>
+
+  <!-- Sequence Lifelines -->
+  <line x1="38" y1="34" x2="38" y2="94" stroke="#5f6167" stroke-width="2" stroke-dasharray="4,3"/>
+  <line x1="90" y1="34" x2="90" y2="94" stroke="#5f6167" stroke-width="2" stroke-dasharray="4,3"/>
+
+  <!-- Actor Boxes -->
+  <rect x="24" y="24" width="28" height="16" rx="4" fill="#31314e" stroke="#7186fd" stroke-width="1.5"/>
+  <rect x="76" y="24" width="28" height="16" rx="4" fill="#31314e" stroke="#7186fd" stroke-width="1.5"/>
+
+  <!-- Forward Message (Alice ->> Bob) -->
+  <line x1="38" y1="56" x2="86" y2="56" stroke="#7186fd" stroke-width="2"/>
+  <polygon points="88,56 80,51 80,61" fill="#7186fd"/>
+
+  <!-- Activation Bar on Bob -->
+  <rect x="86" y="54" width="8" height="34" rx="2" fill="#7186fd" fill-opacity="0.25" stroke="#7186fd" stroke-width="1.2"/>
+
+  <!-- Return Message (Bob -->> Alice) -->
+  <line x1="86" y1="76" x2="42" y2="76" stroke="#ffd166" stroke-width="2" stroke-dasharray="4,3"/>
+  <polyline points="48,70 40,76 48,82" fill="none" stroke="#ffd166" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

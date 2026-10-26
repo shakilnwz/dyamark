@@ -1,0 +1,24 @@
+# Maintainer: shakilnwz
+pkgname=dyamark
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Fast Markdown viewer and editor with native Mermaid sequence diagrams"
+arch=('x86_64')
+url="https://github.com/shakilnwz/dyamark"
+license=('MIT')
+depends=('wayland' 'libxkbcommon' 'vulkan-icd-loader')
+makedepends=('go' 'vulkan-headers')
+source=()
+
+build() {
+  cd "$startdir/.."
+  C_INCLUDE_PATH="${C_INCLUDE_PATH:-}${C_INCLUDE_PATH:+:}$HOME/.local/include" \
+  go build -trimpath -ldflags "-s -w -X gioui.org/app.ID=dyamark" -o build/dyamark .
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 build/dyamark "$pkgdir/usr/bin/dyamark"
+  install -Dm644 pkgbuild/dyamark.desktop "$pkgdir/usr/share/applications/dyamark.desktop"
+  install -Dm644 pkgbuild/dyamark.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/dyamark.svg"
+}
