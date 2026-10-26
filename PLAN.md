@@ -45,7 +45,8 @@ one.
 | Language | Go (1.27, set up through mise) | One binary, simple concurrency, easy tests |
 | UI | [Gio](https://gioui.org) | Pure-Go, GPU-drawn, Wayland-native, immediate mode, no browser engine |
 | Markdown | [`yuin/goldmark`](https://github.com/yuin/goldmark) + GFM | Fast and CommonMark-correct. Start from `gioui.org/x/markdown` + `x/richtext` and extend them for tables and code blocks |
-| Sequence diagrams | Our own `seq` package: parser, layout, Gio drawer, SVG writer | The core of the project. A port of Mermaid's sequence code (MIT) |
+| Sequence parser | [`julianshen/mmgo`](https://github.com/julianshen/mmgo)'s `pkg/parser/sequence`, **copied into `seq/parse`** and extended | MIT, standard library only, keeps colours, `rect`, create/destroy and the block tree. See `docs/reports/2026-10-26-go-mermaid-libraries.md` |
+| Sequence layout + drawing | Our own `seq/layout`, `seq/draw`, `seq/svg` | No Go module matches Mermaid's layout or draws to Gio. A port of Mermaid's `sequenceRenderer.ts` (MIT) |
 | Other Mermaid types | `mmdc` on request, shown as a PNG | Starts Chromium only when asked, only for that diagram |
 | File watching | [`fsnotify/fsnotify`](https://github.com/fsnotify/fsnotify) | Live reload and external-change prompts |
 | File picker | xdg-desktop-portal over D-Bus ([`godbus/dbus`](https://github.com/godbus/dbus)) | Same as omawrite, never a home-made dialog |
@@ -72,9 +73,18 @@ one.
 
 Four pieces with clean edges, so each can be tested on its own:
 
-1. **`seq/parse`**: text to AST. A hand-written lexer and parser following
-   Mermaid's `sequenceDiagram.jison` grammar and the semantics of
-   `sequenceDb.ts`. Errors carry line and column.
+1. **`seq/parse`**: text to AST. It starts as a copy of mmgo's sequence
+   parser and its data model (~870 lines, 80 tests, MIT, upstream commit
+   noted in `seq/parse/UPSTREAM`). It's copied rather than imported because
+   upstream is quiet and we extend it:
+   - `%%{init}%%` and frontmatter config (theme, `themeVariables`,
+     `mirrorActors`, margins), which mmgo ignores
+   - `wrap`, and `<br>` / entity codes in labels
+   - the source line for every item, not only for errors
+   - later, the v11 typed participant shapes
+
+   Mermaid's `sequenceDiagram.jison` and `sequenceDb.ts` stay the reference
+   for behaviour. Errors carry the line number.
 2. **`seq/layout`**: AST to geometry (rectangles, lines, text runs, all in
    float32 coordinates). A port of `sequenceRenderer.ts`, with the same
    config defaults (`actorMargin` 50, actor 150×65, `boxMargin` 10,
@@ -86,15 +96,17 @@ Four pieces with clean edges, so each can be tested on its own:
 4. **`seq/svg`**: geometry to SVG. Needed for the parity tests below, and
    it makes export almost free later.
 
-Port with attribution: Mermaid is MIT-licensed. Keep its LICENSE in
-`seq/LICENSE.mermaid` and note which upstream version each file follows.
+Port and copy with attribution. Mermaid and mmgo are both MIT-licensed. Keep
+their licences as `seq/LICENSE.mermaid` and `seq/parse/LICENSE.mmgo`, and
+note which upstream version or commit each file follows.
 
 ### Parity testing against Mermaid
 
 `mmdc` is installed, so parity is a test, not an opinion:
 
 - `seq/testdata/*.mmd` holds the diagrams. Port the cases from Mermaid's own
-  sequence specs, then add our own.
+  sequence specs, add the inputs from mmgo's and nlink-jp/mermaid-render's
+  tests, then add our own.
 - `bin/golden` runs `mmdc` on each one, using the **same font** as dyamark
   through a Mermaid config, and saves the reference SVG beside it. The
   reference SVGs are committed, so tests don't need `mmdc`.
@@ -212,7 +224,8 @@ dyamark/
     app.go  view.go  editor.go  viewer.go  files.go  theme.go  portal.go
   markdown/                  goldmark AST → view blocks (Gio widgets)
   seq/
-    parse/  layout/  draw/  svg/
+    parse/                   copied from mmgo (LICENSE.mmgo, UPSTREAM), extended
+    layout/  draw/  svg/
     testdata/*.mmd  testdata/*.ref.svg
     LICENSE.mermaid
   fonts/                     bundled UI and diagram fonts, with their licences
@@ -231,8 +244,9 @@ dyamark/
    hard-coded sequence diagram drawn by hand. Measure binary size,
    start-up and RSS against the budget. Confirm the build packages Gio needs
    are present (wayland, libxkbcommon, mesa/EGL, vulkan-headers).
-1. **Parser.** `seq/parse` for the v1 syntax, with tests ported from
-   Mermaid's specs.
+1. **Parser.** Copy mmgo's parser and its tests into `seq/parse`, then add
+   config, `wrap`, `<br>` and per-item line numbers, with tests ported from
+   Mermaid's specs. This is a few days instead of a from-scratch parser.
 2. **Layout + SVG + parity.** `seq/layout`, `seq/svg`, `bin/golden`, and
    parity tests passing on 30 or more diagrams.
 3. **Drawing + viewer.** `seq/draw`, the fullscreen viewer with zoom, pan
@@ -255,6 +269,9 @@ comes early.
 
 ## Risks
 
+- **The copied parser.** mmgo is young (2026, one maintainer) and its tests
+  are its own reading of Mermaid. Treat it as a starting point: the parity
+  tests against `mmdc` decide what's right, not mmgo's tests.
 - **Parity drift.** Mermaid keeps changing its sequence renderer. Pin the
   upstream version the port follows, and re-run `bin/golden` against new
   `mmdc` releases on purpose, not automatically.
