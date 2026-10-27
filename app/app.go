@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,8 +20,10 @@ import (
 	"dyamark/seq/parse"
 
 	"gioui.org/app"
+	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/system"
+	"gioui.org/io/transfer"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -111,9 +115,14 @@ func New(opts Options) (*App, error) {
 	// Match app ID to dyamark.desktop on Wayland / Hyprland
 	app.ID = "dyamark"
 
+	title := "dyamark"
+	if opts.FilePath != "" {
+		title = fmt.Sprintf("%s — dyamark", filepath.Base(opts.FilePath))
+	}
+
 	w := new(app.Window)
 	w.Option(
-		app.Title("dyamark"),
+		app.Title(title),
 		app.Size(unit.Dp(900), unit.Dp(640)),
 		app.MinSize(unit.Dp(450), unit.Dp(350)),
 	)
@@ -140,6 +149,7 @@ func New(opts Options) (*App, error) {
 			source = data
 		} else {
 			fmt.Fprintf(os.Stderr, "dyamark: opening %s: %v\n", opts.FilePath, err)
+			source = []byte(fmt.Sprintf("# Error: Cannot open file\n\n`%s`\n\n%v\n", opts.FilePath, err))
 		}
 	}
 
@@ -221,6 +231,16 @@ func New(opts Options) (*App, error) {
 			newDoc := markdown.Parse(newData, a.cache)
 			a.doc = newDoc
 			a.mdView.SetDocument(newDoc)
+
+			var asts []*parse.Diagram
+			for _, s := range newDoc.Sequences {
+				if s.AST != nil {
+					asts = append(asts, s.AST)
+				}
+			}
+			if len(asts) > 0 {
+				a.viewer.SetDiagrams(asts, a.viewer.CurIndex)
+			}
 			a.window.Invalidate()
 		})
 		if err != nil {
@@ -249,6 +269,61 @@ func (a *App) setTheme(t *Theme) {
 	a.theme = t
 	a.mu.Unlock()
 	a.window.Invalidate()
+}
+
+// OpenFile loads a file into the application, updates watchers, title, and views.
+func (a *App) OpenFile(filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	a.opts.FilePath = filePath
+	a.window.Option(app.Title(fmt.Sprintf("%s — dyamark", filepath.Base(filePath))))
+
+	doc := markdown.Parse(data, a.cache)
+	a.doc = doc
+	a.mdView.SetDocument(doc)
+
+	var asts []*parse.Diagram
+	for _, s := range doc.Sequences {
+		if s.AST != nil {
+			asts = append(asts, s.AST)
+		}
+	}
+	if len(asts) > 0 {
+		a.viewer.SetDiagrams(asts, 0)
+	}
+
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if (ext == ".mmd" || ext == ".mermaid" || (len(doc.Blocks) == 1 && len(doc.Sequences) == 1)) && len(asts) > 0 {
+		a.mode = ModeViewer
+	} else {
+		a.mode = ModeInline
+	}
+
+	if a.fileWatcher != nil {
+		a.fileWatcher.Close()
+		a.fileWatcher = nil
+	}
+	a.fileWatcher, _ = WatchFile(filePath, func(newData []byte) {
+		newDoc := markdown.Parse(newData, a.cache)
+		a.doc = newDoc
+		a.mdView.SetDocument(newDoc)
+		var newASTs []*parse.Diagram
+		for _, s := range newDoc.Sequences {
+			if s.AST != nil {
+				newASTs = append(newASTs, s.AST)
+			}
+		}
+		if len(newASTs) > 0 {
+			a.viewer.SetDiagrams(newASTs, a.viewer.CurIndex)
+		}
+		a.window.Invalidate()
+	})
+
+	a.window.Invalidate()
+	return nil
 }
 
 func (a *App) currentTheme() *Theme {
@@ -281,14 +356,42 @@ func (a *App) Run() error {
 			}
 
 			for {
-				ev, ok := gtx.Event(key.Filter{Required: key.ModCtrl, Name: "Q"})
+				ev, ok := gtx.Event(
+					key.Filter{Required: key.ModCtrl, Name: "Q"},
+					transfer.TargetFilter{Target: a, Type: "text/uri-list"},
+				)
 				if !ok {
 					break
 				}
-				if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
-					// Close through the window, so later phases can ask
-					// about unsaved work before it goes.
-					a.window.Perform(system.ActionClose)
+				switch ev := ev.(type) {
+				case key.Event:
+					if ev.State == key.Press {
+						// Close through the window, so later phases can ask
+						// about unsaved work before it goes.
+						a.window.Perform(system.ActionClose)
+					}
+				case transfer.DataEvent:
+					if ev.Type == "text/uri-list" {
+						rc := ev.Open()
+						data, err := io.ReadAll(rc)
+						rc.Close()
+						if err == nil {
+							for _, line := range strings.Split(string(data), "\n") {
+								line = strings.TrimSpace(line)
+								if strings.HasPrefix(line, "file://") {
+									path := strings.TrimPrefix(line, "file://")
+									if u, err := url.PathUnescape(path); err == nil {
+										path = u
+									}
+									_ = a.OpenFile(path)
+									break
+								} else if line != "" && !strings.HasPrefix(line, "#") {
+									_ = a.OpenFile(line)
+									break
+								}
+							}
+						}
+					}
 				}
 			}
 
@@ -322,6 +425,11 @@ func (a *App) Run() error {
 
 			theme := a.currentTheme()
 			paint.FillShape(&a.ops, theme.Background, clip.Rect(image.Rectangle{Max: e.Size}).Op())
+
+			// Register whole window area for drag-and-drop file target
+			dropArea := clip.Rect(image.Rectangle{Max: e.Size}).Push(gtx.Ops)
+			event.Op(gtx.Ops, a)
+			dropArea.Pop()
 
 			if a.mode == ModeViewer && a.viewer != nil {
 				a.viewer.Layout(gtx, a.mTheme, theme)

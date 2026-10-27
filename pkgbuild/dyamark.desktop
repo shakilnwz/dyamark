@@ -6,6 +6,6 @@ Icon=dyamark
 Terminal=false
 Type=Application
 Categories=Utility;TextEditor;Development;
-MimeType=text/markdown;text/x-markdown;
+MimeType=text/markdown;text/x-markdown;text/plain;text/vnd.mermaid;
 StartupWMClass=dyamark
 Keywords=markdown;mermaid;sequence;diagram;editor;viewer;
