@@ -1,4 +1,5 @@
 build/
+/dyamark
 *.dyamark-tmp
 pkgbuild/*.pkg.tar.zst
 pkgbuild/src/
