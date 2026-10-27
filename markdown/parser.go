@@ -6,8 +6,12 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
+
+var gm = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 // ParsedDocument holds the rendered blocks and sequence diagrams from markdown.
 type ParsedDocument struct {
@@ -48,7 +52,7 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 		cache = NewDiagramCache()
 	}
 
-	doc := goldmark.DefaultParser().Parse(text.NewReader(source))
+	doc := gm.Parser().Parse(text.NewReader(source))
 	lineIdx := NewLineIndex(source)
 
 	var blocks []Block
@@ -115,6 +119,9 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 
 		case *ast.ThematicBreak:
 			blocks = append(blocks, &DividerBlock{})
+
+		case *east.Table:
+			blocks = append(blocks, extractTable(n, source))
 		}
 	}
 
@@ -221,4 +228,27 @@ func extractQuote(q *ast.Blockquote, source []byte) *QuoteBlock {
 		buf.WriteString("\n")
 	}
 	return &QuoteBlock{Text: strings.TrimSpace(buf.String())}
+}
+
+func extractTable(t *east.Table, source []byte) *TableBlock {
+	tb := &TableBlock{}
+	for child := t.FirstChild(); child != nil; child = child.NextSibling() {
+		switch r := child.(type) {
+		case *east.TableHeader:
+			for rowChild := r.FirstChild(); rowChild != nil; rowChild = rowChild.NextSibling() {
+				if cell, ok := rowChild.(*east.TableCell); ok {
+					tb.Headers = append(tb.Headers, strings.TrimSpace(extractNodeText(cell, source)))
+				}
+			}
+		case *east.TableRow:
+			var row []string
+			for cellChild := r.FirstChild(); cellChild != nil; cellChild = cellChild.NextSibling() {
+				if cell, ok := cellChild.(*east.TableCell); ok {
+					row = append(row, strings.TrimSpace(extractNodeText(cell, source)))
+				}
+			}
+			tb.Rows = append(tb.Rows, row)
+		}
+	}
+	return tb
 }

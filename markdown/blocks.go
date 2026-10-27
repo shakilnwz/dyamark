@@ -461,6 +461,97 @@ func (d *DividerBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Th
 	return layout.Dimensions{Size: image.Pt(width, 24)}
 }
 
+// TableBlock represents a Markdown table with headers and data rows.
+type TableBlock struct {
+	Headers []string
+	Rows    [][]string
+}
+
+func (t *TableBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
+	if len(t.Headers) == 0 && len(t.Rows) == 0 {
+		return layout.Dimensions{}
+	}
+
+	numCols := len(t.Headers)
+	if numCols == 0 && len(t.Rows) > 0 {
+		numCols = len(t.Rows[0])
+	}
+	if numCols == 0 {
+		return layout.Dimensions{}
+	}
+
+	totalW := gtx.Constraints.Max.X
+	colW := float32(totalW) / float32(numCols)
+	cellPadX := float32(10.0)
+	cellPadY := float32(8.0)
+	rowH := float32(34.0)
+
+	numRows := len(t.Rows)
+	if len(t.Headers) > 0 {
+		numRows++
+	}
+	tableH := float32(numRows) * rowH
+
+	tableRect := clip.Rect(image.Rectangle{Max: image.Pt(totalW, int(tableH))})
+	paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 60), tableRect.Op())
+	paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 40), clip.Stroke{Path: tableRect.Path(), Width: 1}.Op())
+
+	curY := float32(0.0)
+
+	if len(t.Headers) > 0 {
+		hdrRect := clip.Rect(image.Rectangle{Max: image.Pt(totalW, int(rowH))})
+		paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 200), hdrRect.Op())
+
+		for c, hText := range t.Headers {
+			lbl := material.Label(th, unit.Sp(13), hText)
+			lbl.Color = oTheme.Foreground
+			lbl.Font.Weight = font.Bold
+			trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(c)*colW+cellPadX, curY+cellPadY))).Push(gtx.Ops)
+			lbl.Layout(gtx)
+			trans.Pop()
+		}
+
+		curY += rowH
+		var div clip.Path
+		div.Begin(gtx.Ops)
+		div.MoveTo(f32.Pt(0, curY))
+		div.LineTo(f32.Pt(float32(totalW), curY))
+		paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 60), clip.Stroke{Path: div.End(), Width: 1.5}.Op())
+	}
+
+	for rIdx, row := range t.Rows {
+		if rIdx%2 == 1 {
+			zRect := clip.Rect(image.Rectangle{
+				Min: image.Pt(0, int(curY)),
+				Max: image.Pt(totalW, int(curY+rowH)),
+			})
+			paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 100), zRect.Op())
+		}
+
+		for c, cellText := range row {
+			if c >= numCols {
+				break
+			}
+			lbl := material.Label(th, unit.Sp(13), cellText)
+			lbl.Color = oTheme.Foreground
+			trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(c)*colW+cellPadX, curY+cellPadY))).Push(gtx.Ops)
+			lbl.Layout(gtx)
+			trans.Pop()
+		}
+
+		curY += rowH
+		if rIdx < len(t.Rows)-1 {
+			var div clip.Path
+			div.Begin(gtx.Ops)
+			div.MoveTo(f32.Pt(0, curY))
+			div.LineTo(f32.Pt(float32(totalW), curY))
+			paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 25), clip.Stroke{Path: div.End(), Width: 1}.Op())
+		}
+	}
+
+	return layout.Dimensions{Size: image.Pt(totalW, int(tableH+14))}
+}
+
 func withAlpha(c color.NRGBA, a uint8) color.NRGBA {
 	c.A = a
 	return c

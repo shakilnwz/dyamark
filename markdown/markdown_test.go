@@ -23,6 +23,11 @@ Introduction paragraph with some text.
 
 > A wise quote.
 
+| Key | Action |
+|---|---|
+| Enter | Open viewer |
+| Esc | Close viewer |
+
 ---
 
 ` + "```mermaid" + `
@@ -49,7 +54,7 @@ func TestParseMarkdown(t *testing.T) {
 	}
 
 	// Check headings
-	var h1Count, pCount, listCount, quoteCount, divCount, seqCount, mermaidCount, codeCount int
+	var h1Count, pCount, listCount, quoteCount, divCount, seqCount, mermaidCount, codeCount, tableCount int
 	for _, b := range doc.Blocks {
 		switch blk := b.(type) {
 		case *HeadingBlock:
@@ -70,6 +75,8 @@ func TestParseMarkdown(t *testing.T) {
 			mermaidCount++
 		case *CodeBlock:
 			codeCount++
+		case *TableBlock:
+			tableCount++
 		}
 	}
 
@@ -96,6 +103,9 @@ func TestParseMarkdown(t *testing.T) {
 	}
 	if codeCount != 1 {
 		t.Errorf("expected 1 code block, got %d", codeCount)
+	}
+	if tableCount != 1 {
+		t.Errorf("expected 1 table, got %d", tableCount)
 	}
 }
 
