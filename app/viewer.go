@@ -35,9 +35,8 @@ type Viewer struct {
 	lastSize   image.Point
 	pointerPos f32.Point
 
-	dragging  bool
-	dragStart f32.Point
-	panStart  f32.Point
+	dragging bool
+	dragPos  f32.Point
 
 	// Callbacks
 	OnClose func()
@@ -222,6 +221,13 @@ func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) l
 	// Background fill
 	paint.FillShape(gtx.Ops, oTheme.Background, clip.Rect(image.Rectangle{Max: size}).Op())
 
+	// Set cursor shape: open hand (Grab) or closed hand (Grabbing)
+	if v.dragging {
+		pointer.CursorGrabbing.Add(gtx.Ops)
+	} else {
+		pointer.CursorGrab.Add(gtx.Ops)
+	}
+
 	// Set up hit-testing area for pointer events
 	area := clip.Rect(image.Rectangle{Max: size}).Push(gtx.Ops)
 	event.Op(gtx.Ops, v)
@@ -281,25 +287,31 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 		case pointer.Event:
 			v.pointerPos = e.Position
 			switch e.Kind {
+			case pointer.Move:
+				v.pointerPos = e.Position
 			case pointer.Press:
 				if e.Buttons == pointer.ButtonPrimary {
 					v.dragging = true
-					v.dragStart = e.Position
-					v.panStart = v.Pan
+					v.dragPos = e.Position
+					gtx.Execute(pointer.GrabCmd{Tag: v, ID: e.PointerID})
 				}
 			case pointer.Drag:
 				if v.dragging {
-					delta := e.Position.Sub(v.dragStart)
-					v.Pan = v.panStart.Add(delta)
+					delta := e.Position.Sub(v.dragPos)
+					v.Pan = v.Pan.Add(delta)
+					v.dragPos = e.Position
+					gtx.Execute(op.InvalidateCmd{})
 				}
 			case pointer.Release, pointer.Cancel:
 				v.dragging = false
 			case pointer.Scroll:
-				factor := float32(1.15)
-				if e.Scroll.Y > 0 {
-					factor = 1.0 / 1.15
+				if e.Scroll.Y < 0 {
+					v.ZoomBy(1.15, e.Position)
+					gtx.Execute(op.InvalidateCmd{})
+				} else if e.Scroll.Y > 0 {
+					v.ZoomBy(1.0/1.15, e.Position)
+					gtx.Execute(op.InvalidateCmd{})
 				}
-				v.ZoomBy(factor, e.Position)
 			}
 
 		case key.Event:
@@ -348,8 +360,8 @@ func (v *Viewer) drawDiagram(gtx layout.Context, th *material.Theme, seqTh seq.T
 	clipStack := clip.Rect(image.Rectangle{Max: size}).Push(gtx.Ops)
 	defer clipStack.Pop()
 
-	// Apply Pan offset and Zoom scaling
-	trans := op.Affine(f32.Affine2D{}.Offset(v.Pan).Scale(f32.Pt(0, 0), f32.Pt(v.Zoom, v.Zoom))).Push(gtx.Ops)
+	// Apply Zoom scaling first, then Pan offset in true screen coordinates
+	trans := op.Affine(f32.Affine2D{}.Scale(f32.Pt(0, 0), f32.Pt(v.Zoom, v.Zoom)).Offset(v.Pan)).Push(gtx.Ops)
 	defer trans.Pop()
 
 	diagGtx := gtx
@@ -408,7 +420,7 @@ func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh 
 
 	// Draw pinned actors: translate X with Pan.X, keep Y fixed at pad
 	pinnedY := float32(10.0)
-	actorTrans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(v.Pan.X, pinnedY)).Scale(f32.Pt(0, 0), f32.Pt(v.Zoom, v.Zoom))).Push(gtx.Ops)
+	actorTrans := op.Affine(f32.Affine2D{}.Scale(f32.Pt(0, 0), f32.Pt(v.Zoom, v.Zoom)).Offset(f32.Pt(v.Pan.X, pinnedY))).Push(gtx.Ops)
 
 	diagGtx := gtx
 	diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
