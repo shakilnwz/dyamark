@@ -9,6 +9,7 @@ import (
 	"dyamark/seq/parse"
 
 	"gioui.org/f32"
+	"gioui.org/gesture"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -35,8 +36,9 @@ type Viewer struct {
 	lastSize   image.Point
 	pointerPos f32.Point
 
-	dragging bool
-	dragPos  f32.Point
+	drag      gesture.Drag
+	dragStart f32.Point
+	panStart  f32.Point
 
 	// Callbacks
 	OnClose func()
@@ -222,14 +224,15 @@ func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) l
 	paint.FillShape(gtx.Ops, oTheme.Background, clip.Rect(image.Rectangle{Max: size}).Op())
 
 	// Set cursor shape: open hand (Grab) or closed hand (Grabbing)
-	if v.dragging {
+	if v.drag.Dragging() {
 		pointer.CursorGrabbing.Add(gtx.Ops)
 	} else {
 		pointer.CursorGrab.Add(gtx.Ops)
 	}
 
-	// Set up hit-testing area for pointer events
+	// Set up hit-testing area for pointer events (drag gesture and viewer events)
 	area := clip.Rect(image.Rectangle{Max: size}).Push(gtx.Ops)
+	v.drag.Add(gtx.Ops)
 	event.Op(gtx.Ops, v)
 	area.Pop()
 
@@ -258,11 +261,30 @@ func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) l
 func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 	center := f32.Pt(float32(size.X)/2, float32(size.Y)/2)
 
+	// Process drag gesture (move tool)
+	for {
+		ev, ok := v.drag.Update(gtx.Metric, gtx.Source, gesture.Both)
+		if !ok {
+			break
+		}
+		switch ev.Kind {
+		case pointer.Press:
+			v.dragStart = ev.Position
+			v.panStart = v.Pan
+		case pointer.Drag:
+			delta := ev.Position.Sub(v.dragStart)
+			v.Pan = v.panStart.Add(delta)
+			gtx.Execute(op.InvalidateCmd{})
+		}
+	}
+
 	for {
 		ev, ok := gtx.Event(
 			pointer.Filter{
-				Target: v,
-				Kinds:  pointer.Press | pointer.Release | pointer.Drag | pointer.Scroll | pointer.Move,
+				Target:  v,
+				Kinds:   pointer.Scroll | pointer.Move,
+				ScrollX: pointer.ScrollRange{Min: -1000000, Max: 1000000},
+				ScrollY: pointer.ScrollRange{Min: -1000000, Max: 1000000},
 			},
 			key.Filter{Focus: v},
 			key.Filter{Name: key.NameEscape},
@@ -289,21 +311,6 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 			switch e.Kind {
 			case pointer.Move:
 				v.pointerPos = e.Position
-			case pointer.Press:
-				if e.Buttons == pointer.ButtonPrimary {
-					v.dragging = true
-					v.dragPos = e.Position
-					gtx.Execute(pointer.GrabCmd{Tag: v, ID: e.PointerID})
-				}
-			case pointer.Drag:
-				if v.dragging {
-					delta := e.Position.Sub(v.dragPos)
-					v.Pan = v.Pan.Add(delta)
-					v.dragPos = e.Position
-					gtx.Execute(op.InvalidateCmd{})
-				}
-			case pointer.Release, pointer.Cancel:
-				v.dragging = false
 			case pointer.Scroll:
 				if e.Scroll.Y < 0 {
 					v.ZoomBy(1.15, e.Position)

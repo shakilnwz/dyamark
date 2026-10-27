@@ -97,8 +97,10 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	for {
 		ev, ok := gtx.Event(
 			pointer.Filter{
-				Target: v,
-				Kinds:  pointer.Scroll,
+				Target:  v,
+				Kinds:   pointer.Scroll,
+				ScrollX: pointer.ScrollRange{Min: -1000000, Max: 1000000},
+				ScrollY: pointer.ScrollRange{Min: -1000000, Max: 1000000},
 			},
 			key.Filter{Name: key.NameTab},
 			key.Filter{Name: key.NameTab, Required: key.ModShift},

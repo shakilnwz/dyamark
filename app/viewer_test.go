@@ -8,6 +8,8 @@ import (
 	"dyamark/seq/parse"
 
 	"gioui.org/f32"
+	"gioui.org/io/input"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/text"
@@ -137,4 +139,105 @@ func TestViewerLayout(t *testing.T) {
 	if dims.Size != image.Pt(800, 600) {
 		t.Errorf("expected layout size (800, 600), got %v", dims.Size)
 	}
+}
+
+func TestViewerScrollZoomAndDragPan(t *testing.T) {
+	d1, err := parse.Parse(sampleMMD1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewViewer([]*parse.Diagram{d1}, 0)
+
+	collection, err := fonts.Collection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mTheme := material.NewTheme()
+	mTheme.Shaper = text.NewShaper(text.WithCollection(collection), text.NoSystemFonts())
+	oTheme := DefaultTheme(10)
+
+	var r input.Router
+	ops := new(op.Ops)
+	gtx := layout.Context{
+		Ops: ops,
+		Metric: unit.Metric{
+			PxPerDp: 1.0,
+			PxPerSp: 1.0,
+		},
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Source:      r.Source(),
+	}
+
+	frame := func() {
+		gtx.Reset()
+		v.Layout(gtx, mTheme, oTheme)
+		r.Frame(gtx.Ops)
+	}
+
+	// Frame 1: initial render & fit
+	frame()
+	initialZoom := v.Zoom
+
+	// Test 1: Scroll UP -> Zoom in
+	r.Queue(pointer.Event{
+		Kind:     pointer.Scroll,
+		Source:   pointer.Mouse,
+		Position: f32.Pt(400, 300),
+		Scroll:   f32.Pt(0, -100), // scroll up
+	})
+	frame()
+	if v.Zoom <= initialZoom {
+		t.Errorf("expected zoom to increase on scroll up, got %f <= %f", v.Zoom, initialZoom)
+	}
+
+	// Test 2: Scroll DOWN -> Zoom out
+	zoomAfterZoomIn := v.Zoom
+	r.Queue(pointer.Event{
+		Kind:     pointer.Scroll,
+		Source:   pointer.Mouse,
+		Position: f32.Pt(400, 300),
+		Scroll:   f32.Pt(0, 100), // scroll down
+	})
+	frame()
+	if v.Zoom >= zoomAfterZoomIn {
+		t.Errorf("expected zoom to decrease on scroll down, got %f >= %f", v.Zoom, zoomAfterZoomIn)
+	}
+
+	// Test 3: Drag / Move tool
+	panBeforeDrag := v.Pan
+	// Press at (400, 300)
+	r.Queue(pointer.Event{
+		Kind:      pointer.Press,
+		Source:    pointer.Mouse,
+		Buttons:   pointer.ButtonPrimary,
+		Position:  f32.Pt(400, 300),
+		PointerID: 1,
+	})
+	frame()
+
+	// Drag to (450, 370) -> delta (+50, +70)
+	r.Queue(pointer.Event{
+		Kind:      pointer.Move, // becomes pointer.Drag in Gio router
+		Source:    pointer.Mouse,
+		Buttons:   pointer.ButtonPrimary,
+		Position:  f32.Pt(450, 370),
+		PointerID: 1,
+	})
+	frame()
+
+	expectedPan := panBeforeDrag.Add(f32.Pt(50, 70))
+	diffX := v.Pan.X - expectedPan.X
+	diffY := v.Pan.Y - expectedPan.Y
+	if diffX < -1 || diffX > 1 || diffY < -1 || diffY > 1 {
+		t.Errorf("expected pan to move by (+50, +70) to %v, got %v", expectedPan, v.Pan)
+	}
+
+	// Release
+	r.Queue(pointer.Event{
+		Kind:      pointer.Release,
+		Source:    pointer.Mouse,
+		Position:  f32.Pt(450, 370),
+		PointerID: 1,
+	})
+	frame()
 }

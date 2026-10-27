@@ -155,12 +155,23 @@ func New(opts Options) (*App, error) {
 	}
 	viewer := NewViewer(initialASTs, 0)
 
+	initMode := ModeInline
+	if opts.FilePath != "" {
+		ext := strings.ToLower(filepath.Ext(opts.FilePath))
+		if (ext == ".mmd" || ext == ".mermaid") && len(initialASTs) > 0 {
+			initMode = ModeViewer
+		}
+	}
+	if len(doc.Blocks) == 1 && len(doc.Sequences) == 1 && len(initialASTs) > 0 {
+		initMode = ModeViewer
+	}
+
 	a := &App{
 		window: w,
 		mTheme: mTheme,
 		mdView: mdView,
 		viewer: viewer,
-		mode:   ModeInline,
+		mode:   initMode,
 		cache:  cache,
 		doc:    doc,
 		opts:   opts,

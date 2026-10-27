@@ -21,6 +21,7 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
+	"gioui.org/widget"
 	"gioui.org/widget/material"
 )
 
@@ -147,18 +148,21 @@ type SequenceBlock struct {
 	Error        error
 	LastGood     *layoutPkg.Diagram
 	Focused      bool
+	Click        widget.Clickable
 	OnOpenViewer func(block *SequenceBlock)
 }
 
 func (s *SequenceBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
 	width := gtx.Constraints.Max.X
 
+	if s.Click.Clicked(gtx) {
+		if s.OnOpenViewer != nil {
+			s.OnOpenViewer(s)
+		}
+	}
+
 	for {
 		ev, ok := gtx.Event(
-			pointer.Filter{
-				Target: s,
-				Kinds:  pointer.Press,
-			},
 			key.Filter{Focus: s},
 			key.Filter{Name: key.NameEnter},
 			key.Filter{Name: key.NameReturn},
@@ -166,25 +170,12 @@ func (s *SequenceBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *T
 		if !ok {
 			break
 		}
-		switch e := ev.(type) {
-		case pointer.Event:
-			if e.Kind == pointer.Press && e.Buttons == pointer.ButtonPrimary {
-				if s.OnOpenViewer != nil {
-					s.OnOpenViewer(s)
-				}
-			}
-		case key.Event:
-			if e.State == key.Press {
-				if s.OnOpenViewer != nil {
-					s.OnOpenViewer(s)
-				}
+		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
+			if s.OnOpenViewer != nil {
+				s.OnOpenViewer(s)
 			}
 		}
 	}
-
-	area := clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Push(gtx.Ops)
-	event.Op(gtx.Ops, s)
-	area.Pop()
 
 	if s.Error != nil {
 		return s.layoutError(gtx, th, oTheme, width)
@@ -208,37 +199,49 @@ func (s *SequenceBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *T
 	renderH := diagH * scale
 	offsetX := (float32(width) - renderW) / 2
 	offsetY := float32(12.0)
+	totalH := int(renderH + offsetY*2 + 16)
 
-	// Card background & subtle border
-	cardRect := clip.Rect(image.Rectangle{
-		Min: image.Pt(int(offsetX)-8, int(offsetY)-8),
-		Max: image.Pt(int(offsetX+renderW)+8, int(offsetY+renderH)+8),
+	return s.Click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if s.Click.Hovered() {
+			pointer.CursorPointer.Add(gtx.Ops)
+		}
+
+		// Card background & subtle border
+		cardRect := clip.Rect(image.Rectangle{
+			Min: image.Pt(int(offsetX)-8, int(offsetY)-8),
+			Max: image.Pt(int(offsetX+renderW)+8, int(offsetY+renderH)+8),
+		})
+		bgCol := withAlpha(oTheme.LighterBackground, 80)
+		if s.Click.Hovered() {
+			bgCol = withAlpha(oTheme.LighterBackground, 140)
+		}
+		paint.FillShape(gtx.Ops, bgCol, cardRect.Op())
+
+		borderColor := withAlpha(oTheme.Foreground, 30)
+		if s.Focused || s.Click.Hovered() {
+			borderColor = oTheme.Accent
+		}
+		paint.FillShape(gtx.Ops, borderColor, clip.Stroke{Path: cardRect.Path(), Width: 1}.Op())
+
+		trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(offsetX, offsetY)).Scale(f32.Pt(0, 0), f32.Pt(scale, scale))).Push(gtx.Ops)
+
+		themeName := ""
+		var themeVars map[string]string
+		if s.AST != nil {
+			themeName = s.AST.Config.Theme
+			themeVars = s.AST.Config.ThemeVariables
+		}
+		diagTheme := seq.ResolveTheme(oTheme.Seq, themeName, themeVars)
+
+		diagGtx := gtx
+		diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
+		diagGtx.Constraints = layout.Exact(image.Pt(int(diagW), int(diagH)))
+		draw.Draw(diagGtx, th, diagTheme, s.Diagram)
+
+		trans.Pop()
+
+		return layout.Dimensions{Size: image.Pt(width, totalH)}
 	})
-	paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 80), cardRect.Op())
-	borderColor := withAlpha(oTheme.Foreground, 30)
-	if s.Focused {
-		borderColor = oTheme.Accent
-	}
-	paint.FillShape(gtx.Ops, borderColor, clip.Stroke{Path: cardRect.Path(), Width: 1}.Op())
-
-	trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(offsetX, offsetY)).Scale(f32.Pt(0, 0), f32.Pt(scale, scale))).Push(gtx.Ops)
-
-	themeName := ""
-	var themeVars map[string]string
-	if s.AST != nil {
-		themeName = s.AST.Config.Theme
-		themeVars = s.AST.Config.ThemeVariables
-	}
-	diagTheme := seq.ResolveTheme(oTheme.Seq, themeName, themeVars)
-
-	diagGtx := gtx
-	diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
-	diagGtx.Constraints = layout.Exact(image.Pt(int(diagW), int(diagH)))
-	draw.Draw(diagGtx, th, diagTheme, s.Diagram)
-
-	trans.Pop()
-
-	return layout.Dimensions{Size: image.Pt(width, int(renderH+offsetY*2+16))}
 }
 
 func (s *SequenceBlock) layoutError(gtx layout.Context, th *material.Theme, oTheme *Theme, width int) layout.Dimensions {
