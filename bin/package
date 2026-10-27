@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+echo "==> Building Arch package (.pkg.tar.zst)..."
+cd "$ROOT_DIR/pkgbuild"
+
+# If go is in PATH (e.g. mise) but not in pacman DB, skip pacman makedepends check
+if command -v go >/dev/null 2>&1 && ! pacman -Q go >/dev/null 2>&1; then
+    makepkg -f -d "$@"
+else
+    makepkg -f "$@"
+fi
+
+PKG_FILE="$(ls -t "$ROOT_DIR/pkgbuild"/dyamark-*.pkg.tar.zst 2>/dev/null | grep -v 'debug' | head -n1)"
+PKG_SIZE="$(du -h "$PKG_FILE" | cut -f1)"
+echo "==> Package ready: ${PKG_FILE} (${PKG_SIZE})"

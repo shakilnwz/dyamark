@@ -6,4 +6,8 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "==> Packaging and installing dyamark..."
 cd "$ROOT_DIR/pkgbuild"
-makepkg -fsi --noconfirm
+if command -v go >/dev/null 2>&1 && ! pacman -Q go >/dev/null 2>&1; then
+    makepkg -f -d -i --noconfirm "$@"
+else
+    makepkg -fsi --noconfirm "$@"
+fi
