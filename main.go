@@ -19,8 +19,11 @@ func main() {
 	exitAfter := flag.Bool("exit-after", false, "with --measure, quit after the first frame")
 	flag.Parse()
 
+	filePath := flag.Arg(0)
+
 	go func() {
 		a, err := app.New(app.Options{
+			FilePath:   filePath,
 			Measure:    *measure,
 			ExitAfter:  *exitAfter,
 			Start:      start,

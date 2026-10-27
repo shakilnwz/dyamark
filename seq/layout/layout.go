@@ -113,14 +113,21 @@ type layoutEvent struct {
 
 // Layout translates a parsed sequence diagram AST into laid-out geometry.
 func Layout(d *parse.Diagram, m Measurer) (*Diagram, error) {
+	if d == nil {
+		return &Diagram{Look: LookNeo}, nil
+	}
+	return LayoutWithConfig(d, ResolveConfig(d.Config), m)
+}
+
+// LayoutWithConfig lays out a parsed diagram with explicit configuration.
+func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error) {
 	if m == nil {
 		m = Default()
 	}
 	if d == nil {
-		return &Diagram{Look: LookNeo}, nil
+		return &Diagram{Look: cfg.Look}, nil
 	}
 
-	cfg := ResolveConfig(d.Config)
 	out := &Diagram{
 		Look: cfg.Look,
 	}

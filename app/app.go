@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"dyamark/fonts"
+	"dyamark/seq/parse"
 
 	"gioui.org/app"
 	"gioui.org/io/key"
@@ -26,8 +27,17 @@ import (
 	"gioui.org/widget/material"
 )
 
+// Mode represents whether the app is in inline view mode or fullscreen viewer mode.
+type Mode int
+
+const (
+	ModeInline Mode = iota
+	ModeViewer
+)
+
 // Options holds configuration passed from main/CLI flags.
 type Options struct {
+	FilePath  string
 	Measure   bool
 	ExitAfter bool
 	// Start is when main began, the zero point for the start-up metrics.
@@ -38,11 +48,14 @@ type Options struct {
 
 // App represents the main application instance.
 type App struct {
-	window *app.Window
-	mTheme *material.Theme
-	view   *SpikeView
-	opts   Options
-	ops    op.Ops
+	window   *app.Window
+	mTheme   *material.Theme
+	view     *InlineDiagramView
+	viewer   *Viewer
+	mode     Mode
+	diagrams []*parse.Diagram
+	opts     Options
+	ops      op.Ops
 
 	themeWatcher *ThemeWatcher
 	// fullShaper delivers a shaper that also has the system fonts.
@@ -78,15 +91,48 @@ func New(opts Options) (*App, error) {
 	// shouldn't start a process each time.
 	rounding, _ := HyprlandRounding()
 
+	// Load diagram content
+	var diagrams []*parse.Diagram
+	if opts.FilePath != "" {
+		data, err := os.ReadFile(opts.FilePath)
+		if err == nil {
+			diagrams = ExtractDiagrams(string(data))
+		} else {
+			fmt.Fprintf(os.Stderr, "dyamark: opening %s: %v\n", opts.FilePath, err)
+		}
+	}
+	if len(diagrams) == 0 {
+		d, err := parse.Parse(DefaultSampleDiagram)
+		if err == nil {
+			diagrams = []*parse.Diagram{d}
+		}
+	}
+
 	a := &App{
-		window: w,
-		mTheme: mTheme,
-		view:   &SpikeView{},
-		opts:   opts,
-		theme:  DefaultTheme(rounding),
+		window:   w,
+		mTheme:   mTheme,
+		mode:     ModeInline,
+		diagrams: diagrams,
+		opts:     opts,
+		theme:    DefaultTheme(rounding),
 
 		fullShaper: make(chan *text.Shaper, 1),
 	}
+
+	if len(diagrams) > 0 {
+		a.view = NewInlineDiagramView(diagrams[0])
+		a.view.OnClick = func() {
+			a.mode = ModeViewer
+			a.window.Invalidate()
+		}
+
+		a.viewer = NewViewer(diagrams, 0)
+		a.viewer.OnClose = func() {
+			a.mode = ModeInline
+			a.window.Invalidate()
+		}
+	}
+
 	go func() {
 		a.fullShaper <- text.NewShaper(text.WithCollection(fontCollection))
 		a.window.Invalidate()
@@ -148,9 +194,28 @@ func (a *App) Run() error {
 				}
 			}
 
+			if a.mode == ModeInline {
+				for {
+					ev, ok := gtx.Event(key.Filter{Name: key.NameEnter}, key.Filter{Name: key.NameReturn})
+					if !ok {
+						break
+					}
+					if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
+						a.mode = ModeViewer
+						a.window.Invalidate()
+					}
+				}
+			}
+
 			theme := a.currentTheme()
 			paint.FillShape(&a.ops, theme.Background, clip.Rect(image.Rectangle{Max: e.Size}).Op())
-			a.view.Layout(gtx, a.mTheme, theme)
+
+			if a.mode == ModeViewer && a.viewer != nil {
+				a.viewer.Layout(gtx, a.mTheme, theme)
+			} else if a.view != nil {
+				a.view.Layout(gtx, a.mTheme, theme)
+			}
+
 			e.Frame(gtx.Ops)
 
 			if !firstFrameDone {
@@ -161,6 +226,43 @@ func (a *App) Run() error {
 			}
 		}
 	}
+}
+
+// ExtractDiagrams extracts sequence diagrams from markdown content or raw .mmd.
+func ExtractDiagrams(content string) []*parse.Diagram {
+	var result []*parse.Diagram
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "sequenceDiagram") || strings.HasPrefix(trimmed, "%%{init") || strings.HasPrefix(trimmed, "---") {
+		if d, err := parse.Parse(trimmed); err == nil {
+			return []*parse.Diagram{d}
+		}
+	}
+
+	lines := strings.Split(content, "\n")
+	var inFence bool
+	var block []string
+
+	for _, line := range lines {
+		l := strings.TrimSpace(line)
+		if strings.HasPrefix(l, "```") {
+			if inFence {
+				inFence = false
+				code := strings.TrimSpace(strings.Join(block, "\n"))
+				if strings.HasPrefix(code, "sequenceDiagram") || strings.HasPrefix(code, "%%{init") {
+					if d, err := parse.Parse(code); err == nil {
+						result = append(result, d)
+					}
+				}
+				block = nil
+			} else {
+				inFence = true
+				block = nil
+			}
+		} else if inFence {
+			block = append(block, line)
+		}
+	}
+	return result
 }
 
 // reportMetrics prints start-up time and memory after the first frame.
