@@ -97,12 +97,16 @@ func (c *CodeBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme
 	pad := float32(12.0)
 
 	lines := strings.Split(strings.TrimRight(c.Code, "\n"), "\n")
-	lineH := 20
-	contentH := len(lines) * lineH
+	fontSize := unit.Sp(13)
+	lineH := gtx.Metric.Sp(unit.Sp(19))
+	if lineH < 18 {
+		lineH = 18
+	}
 	headerH := 0
 	if c.Language != "" {
-		headerH = 20
+		headerH = gtx.Metric.Sp(unit.Sp(18))
 	}
+	contentH := len(lines) * lineH
 	totalH := contentH + headerH + int(pad*2)
 
 	r := clip.Rect(image.Rectangle{Max: image.Pt(width, totalH)})
@@ -121,7 +125,7 @@ func (c *CodeBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme
 	}
 
 	for _, line := range lines {
-		lbl := material.Label(th, unit.Sp(13), line)
+		lbl := material.Label(th, fontSize, line)
 		lbl.Color = oTheme.Foreground
 		lbl.Font.Typeface = font.Typeface("monospace")
 		trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(pad, y))).Push(gtx.Ops)
@@ -484,7 +488,10 @@ func (t *TableBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Them
 	colW := float32(totalW) / float32(numCols)
 	cellPadX := float32(10.0)
 	cellPadY := float32(8.0)
-	rowH := float32(34.0)
+	rowH := float32(gtx.Metric.Sp(unit.Sp(13))) * 2.2
+	if rowH < 32 {
+		rowH = 32
+	}
 
 	numRows := len(t.Rows)
 	if len(t.Headers) > 0 {

@@ -197,3 +197,25 @@ func TestViewLayout(t *testing.T) {
 		t.Errorf("expected focused index 0, got %d", view.FocusedIndex)
 	}
 }
+
+func TestTextZoom(t *testing.T) {
+	view := NewView(nil)
+	if view.TextScale != 1.0 {
+		t.Errorf("expected initial text scale 1.0, got %f", view.TextScale)
+	}
+
+	view.ZoomTextIn()
+	if view.TextScale <= 1.0 {
+		t.Errorf("expected text scale > 1.0 after zoom in, got %f", view.TextScale)
+	}
+
+	view.ResetTextZoom()
+	if view.TextScale != 1.0 {
+		t.Errorf("expected 1.0 after reset, got %f", view.TextScale)
+	}
+
+	view.ZoomTextOut()
+	if view.TextScale >= 1.0 {
+		t.Errorf("expected text scale < 1.0 after zoom out, got %f", view.TextScale)
+	}
+}

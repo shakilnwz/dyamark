@@ -6,6 +6,7 @@ import (
 	"gioui.org/f32"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -17,6 +18,7 @@ type View struct {
 	Doc          *ParsedDocument
 	List         layout.List
 	FocusedIndex int
+	TextScale    float32 // 1.0 default
 
 	OnOpenViewer    func(block *SequenceBlock)
 	OnRenderMermaid func(block *MermaidOtherBlock)
@@ -27,6 +29,7 @@ func NewView(doc *ParsedDocument) *View {
 	v := &View{
 		Doc:          doc,
 		FocusedIndex: -1,
+		TextScale:    1.0,
 	}
 	v.List.Axis = layout.Vertical
 	v.List.Gap = 12
@@ -39,6 +42,33 @@ func (v *View) SetDocument(doc *ParsedDocument) {
 	if v.FocusedIndex >= len(doc.Sequences) {
 		v.FocusedIndex = len(doc.Sequences) - 1
 	}
+}
+
+// ZoomTextIn increases the text scale by 10%.
+func (v *View) ZoomTextIn() {
+	if v.TextScale <= 0 {
+		v.TextScale = 1.0
+	}
+	v.TextScale += 0.1
+	if v.TextScale > 2.5 {
+		v.TextScale = 2.5
+	}
+}
+
+// ZoomTextOut decreases the text scale by 10%.
+func (v *View) ZoomTextOut() {
+	if v.TextScale <= 0 {
+		v.TextScale = 1.0
+	}
+	v.TextScale -= 0.1
+	if v.TextScale < 0.6 {
+		v.TextScale = 0.6
+	}
+}
+
+// ResetTextZoom resets the text scale to 100%.
+func (v *View) ResetTextZoom() {
+	v.TextScale = 1.0
 }
 
 // FocusNext advances focus to the next sequence diagram.
@@ -66,24 +96,56 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 
 	for {
 		ev, ok := gtx.Event(
+			pointer.Filter{
+				Target: v,
+				Kinds:  pointer.Scroll,
+			},
 			key.Filter{Name: key.NameTab},
 			key.Filter{Name: key.NameTab, Required: key.ModShift},
 			key.Filter{Name: key.NameReturn},
 			key.Filter{Name: key.NameEnter},
+			key.Filter{Required: key.ModCtrl, Name: "="},
+			key.Filter{Required: key.ModCtrl, Name: "+"},
+			key.Filter{Required: key.ModCtrl, Name: "-"},
+			key.Filter{Required: key.ModCtrl, Name: "_"},
+			key.Filter{Required: key.ModCtrl, Name: "0"},
 		)
 		if !ok {
 			break
 		}
-		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
-			if ke.Name == key.NameTab {
-				if ke.Modifiers.Contain(key.ModShift) {
-					v.FocusPrev()
-				} else {
-					v.FocusNext()
+		switch e := ev.(type) {
+		case pointer.Event:
+			if e.Kind == pointer.Scroll && e.Modifiers.Contain(key.ModCtrl) {
+				if e.Scroll.Y < 0 {
+					v.ZoomTextIn()
+				} else if e.Scroll.Y > 0 {
+					v.ZoomTextOut()
 				}
-			} else if (ke.Name == key.NameReturn || ke.Name == key.NameEnter) && v.FocusedIndex >= 0 && v.FocusedIndex < len(v.Doc.Sequences) {
-				if v.OnOpenViewer != nil {
-					v.OnOpenViewer(v.Doc.Sequences[v.FocusedIndex])
+			}
+		case key.Event:
+			if e.State != key.Press {
+				break
+			}
+			if e.Modifiers.Contain(key.ModCtrl) {
+				switch e.Name {
+				case "=", "+":
+					v.ZoomTextIn()
+				case "-", "_":
+					v.ZoomTextOut()
+				case "0":
+					v.ResetTextZoom()
+				}
+			} else {
+				if e.Name == key.NameTab {
+					if e.Modifiers.Contain(key.ModShift) {
+						v.FocusPrev()
+					} else {
+						v.FocusNext()
+					}
+				} else if (e.Name == key.NameReturn || e.Name == key.NameEnter) && v.FocusedIndex >= 0 && v.FocusedIndex < len(v.Doc.Sequences) {
+					if v.OnOpenViewer != nil {
+						v.OnOpenViewer(v.Doc.Sequences[v.FocusedIndex])
+					}
 				}
 			}
 		}
@@ -110,7 +172,11 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(offsetX), 0))).Push(gtx.Ops)
 	defer trans.Pop()
 
+	if v.TextScale <= 0 {
+		v.TextScale = 1.0
+	}
 	colGtx := gtx
+	colGtx.Metric.PxPerSp = gtx.Metric.PxPerSp * v.TextScale
 	colGtx.Constraints = layout.Exact(image.Pt(colW, size.Y))
 
 	// Wire callbacks into blocks
