@@ -280,7 +280,7 @@ dyamark/
    parity tests passing on 30 or more diagrams.
 3. **Drawing + viewer.** *Done.* `seq/draw`, the fullscreen viewer with zoom, pan
    and fit, and the theme mapping.
-4. **Markdown view.** goldmark to Gio for the whole document, with sequence
+4. **Markdown view.** *Done.* goldmark to Gio for the whole document, with sequence
    diagrams inline, error display, other Mermaid types as source, and live
    reload.
 5. **Editing.** Editor, split view with per-diagram caching, atomic save and

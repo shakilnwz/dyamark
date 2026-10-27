@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"dyamark/fonts"
+	"dyamark/markdown"
 	"dyamark/seq/parse"
 
 	"gioui.org/app"
@@ -27,7 +28,7 @@ import (
 	"gioui.org/widget/material"
 )
 
-// Mode represents whether the app is in inline view mode or fullscreen viewer mode.
+// Mode represents whether the app is in document view mode or fullscreen viewer mode.
 type Mode int
 
 const (
@@ -48,22 +49,62 @@ type Options struct {
 
 // App represents the main application instance.
 type App struct {
-	window   *app.Window
-	mTheme   *material.Theme
-	view     *InlineDiagramView
-	viewer   *Viewer
-	mode     Mode
-	diagrams []*parse.Diagram
-	opts     Options
-	ops      op.Ops
+	window *app.Window
+	mTheme *material.Theme
+	mdView *markdown.View
+	viewer *Viewer
+	mode   Mode
+	cache  *markdown.DiagramCache
+	doc    *markdown.ParsedDocument
+	opts   Options
+	ops    op.Ops
 
 	themeWatcher *ThemeWatcher
+	fileWatcher  *FileWatcher
 	// fullShaper delivers a shaper that also has the system fonts.
 	fullShaper chan *text.Shaper
 
 	mu    sync.Mutex
 	theme *Theme
 }
+
+// DefaultSampleMarkdown is shown when dyamark is launched without arguments.
+const DefaultSampleMarkdown = `# dyamark
+
+A fast, native Markdown viewer with live Mermaid sequence diagrams.
+
+## Authentication Flow
+
+Click or press **Enter** on the sequence diagram below to open it in the fullscreen viewer with zoom, pan, and fit:
+
+` + "```mermaid" + `
+sequenceDiagram
+title Authentication Sequence Flow
+participant Alice as Alice
+participant API Gateway as API Gateway
+participant Database as Database
+
+Alice->>API Gateway: POST /api/session
+activate API Gateway
+opt Valid JWT Credentials
+    API Gateway->>Database: SELECT user, hash FROM users
+    activate Database
+    Database-->>API Gateway: 1 row returned
+    deactivate Database
+    Note over API Gateway: Verify Argon2 hash<br/>& issue token
+    API Gateway-->>Alice: 200 OK (JWT Bearer)
+end
+deactivate API Gateway
+` + "```" + `
+
+## Shortcuts
+
+- **Enter** or **Click**: Open diagram in fullscreen viewer
+- **0** / **1** / **W** / **H**: Fit to window / 100% / Fit width / Fit height (in viewer)
+- **+** / **-** or **Scroll**: Zoom in / out at pointer
+- **N**: Toggle sequence numbers
+- **Esc**: Close viewer
+`
 
 // New creates a new application instance.
 func New(opts Options) (*App, error) {
@@ -91,45 +132,88 @@ func New(opts Options) (*App, error) {
 	// shouldn't start a process each time.
 	rounding, _ := HyprlandRounding()
 
-	// Load diagram content
-	var diagrams []*parse.Diagram
+	cache := markdown.NewDiagramCache()
+	source := []byte(DefaultSampleMarkdown)
 	if opts.FilePath != "" {
 		data, err := os.ReadFile(opts.FilePath)
 		if err == nil {
-			diagrams = ExtractDiagrams(string(data))
+			source = data
 		} else {
 			fmt.Fprintf(os.Stderr, "dyamark: opening %s: %v\n", opts.FilePath, err)
 		}
 	}
-	if len(diagrams) == 0 {
-		d, err := parse.Parse(DefaultSampleDiagram)
-		if err == nil {
-			diagrams = []*parse.Diagram{d}
+
+	doc := markdown.Parse(source, cache)
+	mdView := markdown.NewView(doc)
+
+	// Collect initial ASTs for the viewer
+	var initialASTs []*parse.Diagram
+	for _, s := range doc.Sequences {
+		if s.AST != nil {
+			initialASTs = append(initialASTs, s.AST)
 		}
 	}
+	viewer := NewViewer(initialASTs, 0)
 
 	a := &App{
-		window:   w,
-		mTheme:   mTheme,
-		mode:     ModeInline,
-		diagrams: diagrams,
-		opts:     opts,
-		theme:    DefaultTheme(rounding),
+		window: w,
+		mTheme: mTheme,
+		mdView: mdView,
+		viewer: viewer,
+		mode:   ModeInline,
+		cache:  cache,
+		doc:    doc,
+		opts:   opts,
+		theme:  DefaultTheme(rounding),
 
 		fullShaper: make(chan *text.Shaper, 1),
 	}
 
-	if len(diagrams) > 0 {
-		a.view = NewInlineDiagramView(diagrams[0])
-		a.view.OnClick = func() {
+	mdView.OnOpenViewer = func(block *markdown.SequenceBlock) {
+		var asts []*parse.Diagram
+		selectedIdx := 0
+		for i, seq := range a.doc.Sequences {
+			if seq.AST != nil {
+				asts = append(asts, seq.AST)
+			}
+			if seq == block {
+				selectedIdx = i
+			}
+		}
+		if len(asts) > 0 {
+			a.viewer.SetDiagrams(asts, selectedIdx)
 			a.mode = ModeViewer
 			a.window.Invalidate()
 		}
+	}
 
-		a.viewer = NewViewer(diagrams, 0)
-		a.viewer.OnClose = func() {
-			a.mode = ModeInline
+	mdView.OnRenderMermaid = func(block *markdown.MermaidOtherBlock) {
+		go func() {
+			img, err := a.cache.RenderMmdc(block.Source)
+			if err != nil {
+				block.RenderError = err.Error()
+			} else {
+				block.Rendered = img
+				block.RenderError = ""
+			}
 			a.window.Invalidate()
+		}()
+	}
+
+	viewer.OnClose = func() {
+		a.mode = ModeInline
+		a.window.Invalidate()
+	}
+
+	if opts.FilePath != "" {
+		a.fileWatcher, err = WatchFile(opts.FilePath, func(newData []byte) {
+			newDoc := markdown.Parse(newData, a.cache)
+			a.doc = newDoc
+			a.mdView.SetDocument(newDoc)
+			a.window.Invalidate()
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "dyamark: cannot watch %s: %v\n", opts.FilePath, err)
 		}
 	}
 
@@ -167,6 +251,9 @@ func (a *App) Run() error {
 	if a.themeWatcher != nil {
 		defer a.themeWatcher.Close()
 	}
+	if a.fileWatcher != nil {
+		defer a.fileWatcher.Close()
+	}
 	firstFrameDone := false
 
 	for {
@@ -194,26 +281,21 @@ func (a *App) Run() error {
 				}
 			}
 
-			if a.mode == ModeInline {
-				for {
-					ev, ok := gtx.Event(key.Filter{Name: key.NameEnter}, key.Filter{Name: key.NameReturn})
-					if !ok {
-						break
-					}
-					if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
-						a.mode = ModeViewer
-						a.window.Invalidate()
-					}
-				}
-			}
-
 			theme := a.currentTheme()
 			paint.FillShape(&a.ops, theme.Background, clip.Rect(image.Rectangle{Max: e.Size}).Op())
 
 			if a.mode == ModeViewer && a.viewer != nil {
 				a.viewer.Layout(gtx, a.mTheme, theme)
-			} else if a.view != nil {
-				a.view.Layout(gtx, a.mTheme, theme)
+			} else if a.mdView != nil {
+				mdTh := &markdown.Theme{
+					Background:        theme.Background,
+					Foreground:        theme.Foreground,
+					Accent:            theme.Accent,
+					LighterBackground: theme.LighterBackground,
+					Rounding:          theme.Rounding,
+					Seq:               theme.Seq,
+				}
+				a.mdView.Layout(gtx, a.mTheme, mdTh)
 			}
 
 			e.Frame(gtx.Ops)
@@ -226,43 +308,6 @@ func (a *App) Run() error {
 			}
 		}
 	}
-}
-
-// ExtractDiagrams extracts sequence diagrams from markdown content or raw .mmd.
-func ExtractDiagrams(content string) []*parse.Diagram {
-	var result []*parse.Diagram
-	trimmed := strings.TrimSpace(content)
-	if strings.HasPrefix(trimmed, "sequenceDiagram") || strings.HasPrefix(trimmed, "%%{init") || strings.HasPrefix(trimmed, "---") {
-		if d, err := parse.Parse(trimmed); err == nil {
-			return []*parse.Diagram{d}
-		}
-	}
-
-	lines := strings.Split(content, "\n")
-	var inFence bool
-	var block []string
-
-	for _, line := range lines {
-		l := strings.TrimSpace(line)
-		if strings.HasPrefix(l, "```") {
-			if inFence {
-				inFence = false
-				code := strings.TrimSpace(strings.Join(block, "\n"))
-				if strings.HasPrefix(code, "sequenceDiagram") || strings.HasPrefix(code, "%%{init") {
-					if d, err := parse.Parse(code); err == nil {
-						result = append(result, d)
-					}
-				}
-				block = nil
-			} else {
-				inFence = true
-				block = nil
-			}
-		} else if inFence {
-			block = append(block, line)
-		}
-	}
-	return result
 }
 
 // reportMetrics prints start-up time and memory after the first frame.
