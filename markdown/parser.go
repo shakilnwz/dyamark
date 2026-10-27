@@ -52,6 +52,11 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 		cache = NewDiagramCache()
 	}
 
+	trimmed := strings.TrimSpace(string(source))
+	if strings.HasPrefix(trimmed, "sequenceDiagram") || strings.HasPrefix(trimmed, "%%{init") {
+		source = []byte("```mermaid\n" + trimmed + "\n```\n")
+	}
+
 	doc := gm.Parser().Parse(text.NewReader(source))
 	lineIdx := NewLineIndex(source)
 
