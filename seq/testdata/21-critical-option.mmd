@@ -1,0 +1,7 @@
+sequenceDiagram
+Alice->>Database: Transaction begin
+critical Primary write
+    Database->>Primary: Write record
+option Fallback write
+    Database->>Replica: Write replica
+end

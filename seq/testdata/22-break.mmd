@@ -1,0 +1,6 @@
+sequenceDiagram
+Alice->>Service: Start processing
+break When quota exceeded
+    Service-->>Alice: Rate limit error
+end
+Service-->>Alice: Success

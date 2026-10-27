@@ -276,7 +276,7 @@ dyamark/
 1. **Parser.** *Done.* Copy mmgo's parser and its tests into `seq/parse`, then add
    config, `wrap`, `<br>` and per-item line numbers, with tests ported from
    Mermaid's specs. This is a few days instead of a from-scratch parser.
-2. **Layout + SVG + parity.** `seq/layout`, `seq/svg`, `bin/golden`, and
+2. **Layout + SVG + parity.** *Done.* `seq/layout`, `seq/svg`, `bin/golden`, and
    parity tests passing on 30 or more diagrams.
 3. **Drawing + viewer.** `seq/draw`, the fullscreen viewer with zoom, pan
    and fit, and the theme mapping.

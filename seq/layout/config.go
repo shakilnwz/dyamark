@@ -195,28 +195,42 @@ func ResolveConfig(c parse.Config) Config {
 	return cfg
 }
 
-// font is a text style as Mermaid passes it to its measuring code.
-type font struct {
-	family string
-	size   float64
-	weight int
+// Font is a text style as Mermaid passes it to its measuring code.
+type Font struct {
+	Family string
+	Size   float64
+	Weight int
+}
+
+type font = Font
+
+func (c *Config) MessageFont() Font {
+	return Font{c.FontFamily, c.FontSize, c.MessageFontWeight}
+}
+
+func (c *Config) NoteFont() Font {
+	return Font{c.FontFamily, c.FontSize, c.NoteFontWeight}
+}
+
+func (c *Config) ActorFont() Font {
+	return Font{c.FontFamily, c.FontSize, c.ActorFontWeight}
 }
 
 func (c *Config) messageFont() font {
-	return font{c.FontFamily, c.FontSize, c.MessageFontWeight}
+	return c.MessageFont()
 }
 
 func (c *Config) noteFont() font {
-	return font{c.FontFamily, c.FontSize, c.NoteFontWeight}
+	return c.NoteFont()
 }
 
 func (c *Config) actorFont() font {
-	return font{c.FontFamily, c.FontSize, c.ActorFontWeight}
+	return c.ActorFont()
 }
 
 // rendered is f as it's drawn, for heights Mermaid reads back from drawn
 // elements with getBBox().
 func (c *Config) rendered(f font) font {
-	f.family = c.RenderedFamily
+	f.Family = c.RenderedFamily
 	return f
 }

@@ -1,0 +1,6 @@
+sequenceDiagram
+Alice->>Bob: Request data
+opt Include metadata
+    Alice->>Bob: Fetch metadata
+    Bob-->>Alice: Metadata payload
+end

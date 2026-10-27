@@ -1,0 +1,9 @@
+sequenceDiagram
+Alice->>Gateway: Submit task
+par Process A
+    Gateway->>Worker1: Run job 1
+    Worker1-->>Gateway: Result 1
+and Process B
+    Gateway->>Worker2: Run job 2
+    Worker2-->>Gateway: Result 2
+end

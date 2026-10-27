@@ -1,0 +1,7 @@
+sequenceDiagram
+Alice->>Bob: Verify credentials
+alt Valid credentials
+    Bob-->>Alice: Token granted
+else Invalid credentials
+    Bob-->>Alice: 401 Unauthorized
+end

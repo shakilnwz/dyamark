@@ -1,0 +1,15 @@
+sequenceDiagram
+autonumber
+participant C as Client
+participant S as Server
+participant DB as Database
+
+C->>+S: Login request
+Note right of S: Validate inputs
+S->>+DB: Query user hash
+DB-->>-S: User row
+alt Hash match
+    S-->>C: 200 OK + JWT
+else Hash mismatch
+    S-->>-C: 401 Unauthorized
+end

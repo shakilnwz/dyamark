@@ -1,0 +1,6 @@
+sequenceDiagram
+Alice->>Bob: Start polling
+loop Every 5s
+    Alice->>Bob: Status check
+    Bob-->>Alice: Still pending
+end
