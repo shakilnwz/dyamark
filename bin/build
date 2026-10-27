@@ -3,11 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=bin/env
+source "$SCRIPT_DIR/env"
 
 mkdir -p "$ROOT_DIR/build"
-
-# Ensure ~/.local/include is in C_INCLUDE_PATH for Vulkan headers
-export C_INCLUDE_PATH="${C_INCLUDE_PATH:-}${C_INCLUDE_PATH:+:}$HOME/.local/include"
 
 echo "==> Building dyamark..."
 cd "$ROOT_DIR"

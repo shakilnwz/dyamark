@@ -1,0 +1,6 @@
+# Sourced by the other bin/ scripts.
+#
+# Gio draws through OpenGL ES (EGL) on Wayland only: `novulkan` drops the
+# Vulkan backend and its build-time headers, `nox11` drops the X11 backend
+# and its libraries. Omarchy is Wayland-only.
+export GOFLAGS="${GOFLAGS:-} -tags=novulkan,nox11"

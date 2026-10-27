@@ -3,9 +3,21 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=bin/env
+source "$SCRIPT_DIR/env"
 
-export C_INCLUDE_PATH="${C_INCLUDE_PATH:-}${C_INCLUDE_PATH:+:}$HOME/.local/include"
+cd "$ROOT_DIR"
+
+echo "==> Checking formatting..."
+unformatted="$(gofmt -l .)"
+if [[ -n $unformatted ]]; then
+  echo "Not gofmt-formatted:" >&2
+  echo "$unformatted" >&2
+  exit 1
+fi
+
+echo "==> Vetting..."
+go vet ./...
 
 echo "==> Running tests..."
-cd "$ROOT_DIR"
-go test -v ./...
+go test "$@" ./...

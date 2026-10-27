@@ -43,21 +43,39 @@ one.
 | Piece | Choice | Why |
 |---|---|---|
 | Language | Go (1.27, set up through mise) | One binary, simple concurrency, easy tests |
-| UI | [Gio](https://gioui.org) | Pure-Go, GPU-drawn, Wayland-native, immediate mode, no browser engine |
+| UI | [Gio](https://gioui.org), built with `novulkan,nox11` | Pure-Go, GPU-drawn, Wayland-native, immediate mode, no browser engine. OpenGL ES through EGL only: no Vulkan headers to build, no X11 libraries to link |
 | Markdown | [`yuin/goldmark`](https://github.com/yuin/goldmark) + GFM | Fast and CommonMark-correct. Start from `gioui.org/x/markdown` + `x/richtext` and extend them for tables and code blocks |
-| Sequence parser | [`julianshen/mmgo`](https://github.com/julianshen/mmgo)'s `pkg/parser/sequence`, **copied into `seq/parse`** and extended | MIT, standard library only, keeps colours, `rect`, create/destroy and the block tree. See `docs/reports/2026-10-26-go-mermaid-libraries.md` |
+| Sequence parser | [`julianshen/mmgo`](https://github.com/julianshen/mmgo)'s `pkg/parser/sequence`, **copied into `seq/parse`** and extended | MIT, keeps colours, `rect`, create/destroy and the block tree. See `docs/reports/2026-10-26-go-mermaid-libraries.md` |
+| YAML | [`go.yaml.in/yaml/v3`](https://github.com/yaml/go-yaml) | Frontmatter `config:` and participant `@{…}` metadata, which Mermaid reads as YAML |
 | Sequence layout + drawing | Our own `seq/layout`, `seq/draw`, `seq/svg` | No Go module matches Mermaid's layout or draws to Gio. A port of Mermaid's `sequenceRenderer.ts` (MIT) |
 | Other Mermaid types | `mmdc` on request, shown as a PNG | Starts Chromium only when asked, only for that diagram |
 | File watching | [`fsnotify/fsnotify`](https://github.com/fsnotify/fsnotify) | Live reload and external-change prompts |
 | File picker | xdg-desktop-portal over D-Bus ([`godbus/dbus`](https://github.com/godbus/dbus)) | Same as omawrite, never a home-made dialog |
 | Theme | `~/.local/state/omarchy/current/theme/colors.toml` | Same source as the other Omarchy apps |
 
-### Budget (check in phase 0)
+### Budget
 
-- Binary: about 8–12 MB stripped, fonts included. Measure it.
+- Binary: about 8–12 MB stripped, fonts included.
 - Cold start to first paint: under 150 ms.
-- Memory: about 40–80 MB RSS for a document with several diagrams.
+- Memory: about 40–80 MB for a document with several diagrams.
 - Re-layout of a 200-message sequence diagram while typing: under 5 ms.
+
+Phase 0 measured (2026-10-27, AMD Raven laptop, radeonsi, the spike
+diagram, timed from the start of `main`):
+
+| | Budget | Measured |
+|---|---|---|
+| Binary | 8–12 MB | 8.4 MB |
+| First paint | < 150 ms | 88–111 ms |
+| Memory | 40–80 MB | ~105 MB RSS, ~62 MB PSS |
+| Software GL (llvmpipe) | — | 170–420 ms, ~140 MB RSS; works |
+
+- Scanning the system fonts took ~58 ms of start-up, so the first frames use
+  the bundled fonts and the system fonts (the fallback for other scripts)
+  load in the background.
+- RSS counts ~46 MB of Mesa's LLVM and gallium libraries, which are shared
+  with every other GL program; PSS is the fairer number. The Go heap is
+  ~12 MB. Re-measure memory with a real document in phase 4.
 
 ## Architecture
 
@@ -117,9 +135,12 @@ note which upstream version or commit each file follows.
 - `bin/golden --diff NAME` writes both renders side by side as PNG, for
   looking at a failure.
 
-### Sequence feature coverage (Mermaid 11)
+### Sequence feature coverage (Mermaid 12)
 
-v1:
+The reference is Mermaid 12.0.0, the version inside the installed `mmdc`.
+`seq/parse/UPSTREAM` pins the grammar and spec files the parser follows.
+
+v1 (parsed since phase 1):
 
 - `participant` / `actor`, aliases (`participant A as Alice`), implicit
   participants
@@ -138,12 +159,20 @@ v1:
 - Config from frontmatter and `%%{init: …}%%`: `theme`, `themeVariables`,
   `mirrorActors`, the margins, `showSequenceNumbers`
 
-Later:
+Parsed since phase 1, drawn later:
 
-- The v11 participant shapes (`@{ "type": "database" }`, `queue`,
-  `boundary`, `control`, `entity`, `collections`)
-- Actor `links` / `link` menus (shown as a tooltip, not a menu)
+- The typed participant shapes (`@{ "type": "database" }`, `queue`,
+  `boundary`, `control`, `entity`, `collections`) and inline `alias`
+- Half arrows (`-|\`, `-//`, `/|-`, …) and `()` central connections
+- `par_over`
+- Actor `links` / `link` menus (shown as a tooltip, not a menu) and
+  `properties`
 - `accTitle` / `accDescr`, used as accessible names
+
+Where Mermaid's grammar and its documentation disagree, `mmdc` decides:
+`#` starts a comment (so hex colours don't work in `box` or `rect`), a
+message needs its `:`, only whole-line `%%` comments are comments, and only
+declarations may go inside a `box`.
 
 ## Views and editing
 
@@ -239,12 +268,12 @@ dyamark/
 
 ## Phases
 
-0. **Spike (a day).** A Gio window on Hyprland, with the app ID matching
+0. **Spike (a day).** *Done.* A Gio window on Hyprland, with the app ID matching
    `dyamark.desktop`, Omarchy theme colours, a bundled font, and one
    hard-coded sequence diagram drawn by hand. Measure binary size,
    start-up and RSS against the budget. Confirm the build packages Gio needs
    are present (wayland, libxkbcommon, mesa/EGL, vulkan-headers).
-1. **Parser.** Copy mmgo's parser and its tests into `seq/parse`, then add
+1. **Parser.** *Done.* Copy mmgo's parser and its tests into `seq/parse`, then add
    config, `wrap`, `<br>` and per-item line numbers, with tests ported from
    Mermaid's specs. This is a few days instead of a from-scratch parser.
 2. **Layout + SVG + parity.** `seq/layout`, `seq/svg`, `bin/golden`, and

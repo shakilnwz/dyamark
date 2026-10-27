@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"math"
 
+	"dyamark/seq"
+
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/layout"
@@ -16,27 +18,24 @@ import (
 	"gioui.org/widget/material"
 )
 
-// SpikeView renders the Phase 0 hardcoded sequence diagram.
-type SpikeView struct {
-	Zoom float32
-	PanX float32
-	PanY float32
-}
+// SpikeView renders the Phase 0 hardcoded sequence diagram. seq/draw
+// replaces it in phase 3.
+type SpikeView struct{}
 
-func NewSpikeView() *SpikeView {
-	return &SpikeView{
-		Zoom: 1.0,
-		PanX: 0,
-		PanY: 0,
-	}
-}
-
-// Layout draws the sequence diagram spike.
+// Layout draws the sequence diagram spike. All coordinates are in dp: one
+// transform scales the whole drawing to pixels, so shapes and labels stay
+// in proportion on any output scale.
 func (v *SpikeView) Layout(gtx layout.Context, mTheme *material.Theme, oTheme *Theme) layout.Dimensions {
-	ops := gtx.Ops
-	seq := oTheme.Seq
+	size := gtx.Constraints.Max
+	scale := gtx.Metric.PxPerDp
+	defer op.Affine(f32.Affine2D{}.Scale(f32.Point{}, f32.Pt(scale, scale))).Push(gtx.Ops).Pop()
+	// Inside the transform one unit is one dp; text keeps the desktop's
+	// sp-to-dp ratio.
+	gtx.Metric = unit.Metric{PxPerDp: 1, PxPerSp: gtx.Metric.PxPerSp / scale}
+	gtx.Constraints.Max = image.Pt(int(float32(size.X)/scale), int(float32(size.Y)/scale))
 
-	// Diagram dimensions & positions
+	d := diagramPainter{gtx: gtx, th: mTheme, seq: oTheme.Seq}
+
 	// Actors: Alice (Client), API Gateway (Auth/API), Database (Storage)
 	aliceX := float32(140)
 	gatewayX := float32(400)
@@ -46,259 +45,175 @@ func (v *SpikeView) Layout(gtx layout.Context, mTheme *material.Theme, oTheme *T
 	actorHeight := float32(46)
 	topY := float32(40)
 	bottomY := float32(480)
-	radius := int(seq.Rounding)
 
-	// Draw Group / Frame: "opt Authenticated Request"
-	frameLeft := aliceX - 40
-	frameTop := float32(165)
-	frameRight := dbX + 75
-	frameBottom := float32(435)
-	drawFrame(ops, frameLeft, frameTop, frameRight, frameBottom, "opt [Valid JWT Credentials]", seq, mTheme, gtx)
+	d.frame(aliceX-40, 165, dbX+75, 435, "opt [Valid JWT Credentials]")
 
-	// Lifelines (vertical dashed lines)
-	drawDashedVLine(ops, aliceX, topY+actorHeight, bottomY, 1.5, seq.Lifeline, 6, 4)
-	drawDashedVLine(ops, gatewayX, topY+actorHeight, bottomY, 1.5, seq.Lifeline, 6, 4)
-	drawDashedVLine(ops, dbX, topY+actorHeight, bottomY, 1.5, seq.Lifeline, 6, 4)
+	for _, x := range []float32{aliceX, gatewayX, dbX} {
+		d.dashedLine(f32.Pt(x, topY+actorHeight), f32.Pt(x, bottomY), 1.5, d.seq.Lifeline)
+	}
 
-	// Activations
-	// API Gateway active from 120 to 410
-	drawActivation(ops, gatewayX, 120, 410, 14, seq)
-	// Database active from 185 to 265
-	drawActivation(ops, dbX, 185, 265, 14, seq)
+	d.activation(gatewayX, 120, 410, 14)
+	d.activation(dbX, 185, 265, 14)
 
-	// Messages
-	// 1. Alice ->> API Gateway: POST /api/session
-	drawMessage(ops, aliceX, gatewayX-7, 120, "POST /api/session", false, true, seq, mTheme, gtx)
+	d.message(aliceX, gatewayX-7, 120, "POST /api/session", false, true)
+	d.message(gatewayX+7, dbX-7, 185, "SELECT user, hash FROM users", false, true)
+	d.message(dbX-7, gatewayX+7, 265, "1 row returned", true, false)
 
-	// 2. API Gateway ->> Database: SELECT user, hash FROM users
-	drawMessage(ops, gatewayX+7, dbX-7, 185, "SELECT user, hash FROM users", false, true, seq, mTheme, gtx)
-
-	// 3. Database -->> API Gateway: 1 row returned
-	drawMessage(ops, dbX-7, gatewayX+7, 265, "1 row returned", true, false, seq, mTheme, gtx)
-
-	// 4. Note over API Gateway: Verify Argon2 hash & issue JWT
 	noteWidth := float32(180)
-	noteHeight := float32(38)
-	drawNote(ops, gatewayX-noteWidth/2, 310, noteWidth, noteHeight, "Verify Argon2 hash\n& issue token", seq, mTheme, gtx)
+	d.note(gatewayX-noteWidth/2, 310, noteWidth, 38, "Verify Argon2 hash\n& issue token")
 
-	// 5. API Gateway -->> Alice: 200 OK (JWT Bearer)
-	drawMessage(ops, gatewayX-7, aliceX, 410, "200 OK (JWT Bearer)", true, false, seq, mTheme, gtx)
+	d.message(gatewayX-7, aliceX, 410, "200 OK (JWT Bearer)", true, false)
 
-	// Top Actor Boxes
-	drawActor(ops, aliceX, topY, actorWidth, actorHeight, "Alice", radius, seq, mTheme, gtx)
-	drawActor(ops, gatewayX, topY, actorWidth, actorHeight, "API Gateway", radius, seq, mTheme, gtx)
-	drawActor(ops, dbX, topY, actorWidth, actorHeight, "Database", radius, seq, mTheme, gtx)
+	for _, y := range []float32{topY, bottomY} {
+		d.actor(aliceX, y, actorWidth, actorHeight, "Alice")
+		d.actor(gatewayX, y, actorWidth, actorHeight, "API Gateway")
+		d.actor(dbX, y, actorWidth, actorHeight, "Database")
+	}
 
-	// Bottom Actor Boxes
-	drawActor(ops, aliceX, bottomY, actorWidth, actorHeight, "Alice", radius, seq, mTheme, gtx)
-	drawActor(ops, gatewayX, bottomY, actorWidth, actorHeight, "API Gateway", radius, seq, mTheme, gtx)
-	drawActor(ops, dbX, bottomY, actorWidth, actorHeight, "Database", radius, seq, mTheme, gtx)
+	d.label(f32.Pt(40, 10), 0, "Authentication Sequence Flow", 15, oTheme.Foreground, font.Bold, text.Start)
 
-	// Title at the top
-	drawTitle(ops, "Authentication Sequence Flow", mTheme, oTheme, gtx)
-
-	return layout.Dimensions{Size: gtx.Constraints.Max}
+	return layout.Dimensions{Size: size}
 }
 
-func drawTitle(ops *op.Ops, title string, th *material.Theme, oTh *Theme, gtx layout.Context) {
-	defer op.Offset(image.Pt(40, 10)).Push(ops).Pop()
-	lbl := material.Label(th, unit.Sp(15), title)
-	lbl.Color = oTh.Foreground
-	lbl.Font.Weight = font.Bold
-	lbl.Layout(gtx)
+type diagramPainter struct {
+	gtx layout.Context
+	th  *material.Theme
+	seq seq.Theme
 }
 
-func drawActor(ops *op.Ops, centerX, topY, w, h float32, name string, radius int, seq SeqTheme, th *material.Theme, gtx layout.Context) {
-	left := int(centerX - w/2)
-	top := int(topY)
-	rect := image.Rect(left, top, left+int(w), top+int(h))
-
-	// Background fill
-	paint.FillShape(ops, seq.ActorBkg, clip.UniformRRect(rect, radius).Op(ops))
-
-	// Border
-	paint.FillShape(ops, seq.ActorBorder, clip.Stroke{
-		Path:  clip.UniformRRect(rect, radius).Path(ops),
-		Width: 1.5,
-	}.Op())
-
-	// Centered label
-	textOffX := left
-	textOffY := top + int(h/2) - 9
-	defer op.Offset(image.Pt(textOffX, textOffY)).Push(ops).Pop()
-
-	macroGtx := gtx
-	macroGtx.Constraints.Min = image.Pt(int(w), 0)
-	macroGtx.Constraints.Max = image.Pt(int(w), int(h))
-
-	lbl := material.Label(th, unit.Sp(13), name)
-	lbl.Color = seq.ActorText
-	lbl.Alignment = text.Middle
-	lbl.Font.Weight = font.SemiBold
-	lbl.Layout(macroGtx)
+func (d diagramPainter) actor(centerX, topY, w, h float32, name string) {
+	r := rect(centerX-w/2, topY, centerX+w/2, topY+h)
+	d.box(r, d.seq.Rounding, d.seq.ActorBkg, d.seq.ActorBorder, 1.5)
+	d.label(f32.Pt(r.Min.X, topY+h/2-9), w, name, 13, d.seq.ActorText, font.Normal, text.Middle)
 }
 
-func drawActivation(ops *op.Ops, centerX, topY, bottomY, w float32, seq SeqTheme) {
-	left := int(centerX - w/2)
-	rect := image.Rect(left, int(topY), left+int(w), int(bottomY))
-
-	// Fill
-	paint.FillShape(ops, seq.ActivationBkg, clip.Rect(rect).Op())
-	// Border
-	paint.FillShape(ops, seq.ActivationBorder, clip.Stroke{
-		Path:  clip.Rect(rect).Path(),
-		Width: 1.2,
-	}.Op())
+func (d diagramPainter) activation(centerX, topY, bottomY, w float32) {
+	d.box(rect(centerX-w/2, topY, centerX+w/2, bottomY), 0, d.seq.ActivationBkg, d.seq.ActivationBorder, 1.2)
 }
 
-func drawNote(ops *op.Ops, left, top, w, h float32, content string, seq SeqTheme, th *material.Theme, gtx layout.Context) {
-	rect := image.Rect(int(left), int(top), int(left+w), int(top+h))
-	radius := 4
-
-	// Background fill & border
-	paint.FillShape(ops, seq.NoteBkg, clip.UniformRRect(rect, radius).Op(ops))
-	paint.FillShape(ops, seq.NoteBorder, clip.Stroke{
-		Path:  clip.UniformRRect(rect, radius).Path(ops),
-		Width: 1.2,
-	}.Op())
-
-	defer op.Offset(image.Pt(int(left)+6, int(top)+4)).Push(ops).Pop()
-	macroGtx := gtx
-	macroGtx.Constraints.Min = image.Pt(int(w)-12, 0)
-	macroGtx.Constraints.Max = image.Pt(int(w)-12, int(h))
-
-	lbl := material.Label(th, unit.Sp(11), content)
-	lbl.Color = seq.NoteText
-	lbl.Alignment = text.Middle
-	lbl.Layout(macroGtx)
+func (d diagramPainter) note(left, top, w, h float32, content string) {
+	d.box(rect(left, top, left+w, top+h), 4, d.seq.NoteBkg, d.seq.NoteBorder, 1.2)
+	d.label(f32.Pt(left+6, top+4), w-12, content, 11, d.seq.NoteText, font.Normal, text.Middle)
 }
 
-func drawFrame(ops *op.Ops, left, top, right, bottom float32, label string, seq SeqTheme, th *material.Theme, gtx layout.Context) {
-	rect := image.Rect(int(left), int(top), int(right), int(bottom))
-	radius := int(seq.Rounding)
-
-	// Frame background (semi-transparent)
-	paint.FillShape(ops, seq.FrameBkg, clip.UniformRRect(rect, radius).Op(ops))
-
-	// Frame border
-	paint.FillShape(ops, seq.FrameBorder, clip.Stroke{
-		Path:  clip.UniformRRect(rect, radius).Path(ops),
-		Width: 1.0,
-	}.Op())
-
-	// Top-left label badge
-	badgeW := float32(180)
-	badgeH := float32(22)
-	badgeRect := image.Rect(int(left), int(top), int(left+badgeW), int(top+badgeH))
-	paint.FillShape(ops, seq.FrameBorder, clip.UniformRRect(badgeRect, 3).Op(ops))
-
-	defer op.Offset(image.Pt(int(left)+8, int(top)+3)).Push(ops).Pop()
-	lbl := material.Label(th, unit.Sp(10), label)
-	lbl.Color = seq.ActorBkg
-	lbl.Font.Weight = font.Bold
-	lbl.Layout(gtx)
+func (d diagramPainter) frame(left, top, right, bottom float32, label string) {
+	d.box(rect(left, top, right, bottom), d.seq.Rounding, d.seq.FrameBkg, d.seq.FrameBorder, 1)
+	paint.FillShape(d.gtx.Ops, d.seq.FrameBorder, clip.Outline{Path: roundRect(d.gtx.Ops, rect(left, top, left+180, top+22), 3)}.Op())
+	d.label(f32.Pt(left+8, top+3), 0, label, 10, d.seq.FrameText, font.Bold, text.Start)
 }
 
-func drawMessage(ops *op.Ops, fromX, toX, y float32, label string, dashed bool, filledArrow bool, seq SeqTheme, th *material.Theme, gtx layout.Context) {
-	goingRight := toX > fromX
-
-	// Draw arrow line
+func (d diagramPainter) message(fromX, toX, y float32, label string, dashed, filledArrow bool) {
+	from, to := f32.Pt(fromX, y), f32.Pt(toX, y)
 	if dashed {
-		drawDashedHLine(ops, fromX, toX, y, 1.5, seq.Signal, 6, 4)
+		d.dashedLine(from, to, 1.5, d.seq.Signal)
 	} else {
-		drawSolidHLine(ops, fromX, toX, y, 1.5, seq.Signal)
+		d.line(from, to, 1.5, d.seq.Signal)
 	}
+	d.arrowHead(to, toX > fromX, filledArrow)
 
-	// Draw arrowhead at toX
-	if filledArrow {
-		drawFilledArrow(ops, toX, y, goingRight, seq.Signal)
-	} else {
-		drawOpenArrow(ops, toX, y, goingRight, seq.Signal)
-	}
-
-	// Centered label above line
-	minX := float32(math.Min(float64(fromX), float64(toX)))
-	maxX := float32(math.Max(float64(fromX), float64(toX)))
-	width := maxX - minX
-
-	textY := int(y) - 18
-	defer op.Offset(image.Pt(int(minX), textY)).Push(ops).Pop()
-
-	macroGtx := gtx
-	macroGtx.Constraints.Min = image.Pt(int(width), 0)
-	macroGtx.Constraints.Max = image.Pt(int(width), 30)
-
-	lbl := material.Label(th, unit.Sp(11), label)
-	lbl.Color = seq.SignalText
-	lbl.Alignment = text.Middle
-	lbl.Layout(macroGtx)
+	left := min(fromX, toX)
+	d.label(f32.Pt(left, y-18), max(fromX, toX)-left, label, 11, d.seq.SignalText, font.Normal, text.Middle)
 }
 
-func drawSolidHLine(ops *op.Ops, fromX, toX, y, width float32, col color.NRGBA) {
+// box fills r and strokes its outline.
+func (d diagramPainter) box(r frect, radius float32, fill, border color.NRGBA, width float32) {
+	ops := d.gtx.Ops
+	paint.FillShape(ops, fill, clip.Outline{Path: roundRect(ops, r, radius)}.Op())
+	paint.FillShape(ops, border, clip.Stroke{Path: roundRect(ops, r, radius), Width: width}.Op())
+}
+
+// label lays out txt at pos. A width of zero leaves the label unbounded.
+func (d diagramPainter) label(pos f32.Point, width float32, txt string, size unit.Sp, col color.NRGBA, weight font.Weight, align text.Alignment) {
+	defer op.Affine(f32.Affine2D{}.Offset(pos)).Push(d.gtx.Ops).Pop()
+	gtx := d.gtx
+	if width > 0 {
+		gtx.Constraints = layout.Exact(image.Pt(int(width), gtx.Constraints.Max.Y))
+	} else {
+		gtx.Constraints.Min = image.Point{}
+	}
+	lbl := material.Label(d.th, size, txt)
+	lbl.Color = col
+	lbl.Alignment = align
+	lbl.Font.Weight = weight
+	lbl.Layout(gtx)
+}
+
+func (d diagramPainter) line(from, to f32.Point, width float32, col color.NRGBA) {
+	var p clip.Path
+	p.Begin(d.gtx.Ops)
+	p.MoveTo(from)
+	p.LineTo(to)
+	paint.FillShape(d.gtx.Ops, col, clip.Stroke{Path: p.End(), Width: width}.Op())
+}
+
+// dashedLine strokes every dash of the line as one path; Gio strokes have
+// no dash style.
+func (d diagramPainter) dashedLine(from, to f32.Point, width float32, col color.NRGBA) {
+	const dash, gap = 6, 4
+	delta := to.Sub(from)
+	length := float32(math.Hypot(float64(delta.X), float64(delta.Y)))
+	if length == 0 {
+		return
+	}
+	dir := delta.Mul(1 / length)
+	var p clip.Path
+	p.Begin(d.gtx.Ops)
+	for cur := float32(0); cur < length; cur += dash + gap {
+		end := min(cur+dash, length)
+		p.MoveTo(from.Add(dir.Mul(cur)))
+		p.LineTo(from.Add(dir.Mul(end)))
+	}
+	paint.FillShape(d.gtx.Ops, col, clip.Stroke{Path: p.End(), Width: width}.Op())
+}
+
+func (d diagramPainter) arrowHead(tip f32.Point, pointingRight, filled bool) {
+	back := float32(-1)
+	if !pointingRight {
+		back = 1
+	}
+	var p clip.Path
+	p.Begin(d.gtx.Ops)
+	if filled {
+		p.MoveTo(tip)
+		p.LineTo(f32.Pt(tip.X+back*9, tip.Y-4))
+		p.LineTo(f32.Pt(tip.X+back*9, tip.Y+4))
+		p.Close()
+		paint.FillShape(d.gtx.Ops, d.seq.Signal, clip.Outline{Path: p.End()}.Op())
+		return
+	}
+	p.MoveTo(f32.Pt(tip.X+back*8, tip.Y-4))
+	p.LineTo(tip)
+	p.LineTo(f32.Pt(tip.X+back*8, tip.Y+4))
+	paint.FillShape(d.gtx.Ops, d.seq.Signal, clip.Stroke{Path: p.End(), Width: 1.5}.Op())
+}
+
+// frect is a rectangle in float coordinates.
+type frect struct{ Min, Max f32.Point }
+
+func rect(x0, y0, x1, y1 float32) frect {
+	return frect{Min: f32.Pt(x0, y0), Max: f32.Pt(x1, y1)}
+}
+
+// roundRect is clip.RRect with float coordinates, so shapes keep their
+// sub-pixel positions.
+func roundRect(ops *op.Ops, r frect, radius float32) clip.PathSpec {
+	radius = min(radius, (r.Max.X-r.Min.X)/2, (r.Max.Y-r.Min.Y)/2)
+	// Control-point distance for a quarter circle made of one cubic.
+	const k = 0.5523
+	c := radius * k
+	x0, y0, x1, y1 := r.Min.X, r.Min.Y, r.Max.X, r.Max.Y
+
 	var p clip.Path
 	p.Begin(ops)
-	p.MoveTo(f32.Pt(fromX, y))
-	p.LineTo(f32.Pt(toX, y))
-	paint.FillShape(ops, col, clip.Stroke{Path: p.End(), Width: width}.Op())
-}
-
-func drawDashedHLine(ops *op.Ops, fromX, toX, y, width float32, col color.NRGBA, dash, gap float32) {
-	startX := float32(math.Min(float64(fromX), float64(toX)))
-	endX := float32(math.Max(float64(fromX), float64(toX)))
-
-	for cur := startX; cur < endX; cur += dash + gap {
-		segEnd := cur + dash
-		if segEnd > endX {
-			segEnd = endX
-		}
-		var p clip.Path
-		p.Begin(ops)
-		p.MoveTo(f32.Pt(cur, y))
-		p.LineTo(f32.Pt(segEnd, y))
-		paint.FillShape(ops, col, clip.Stroke{Path: p.End(), Width: width}.Op())
-	}
-}
-
-func drawDashedVLine(ops *op.Ops, x, startY, endY, width float32, col color.NRGBA, dash, gap float32) {
-	for cur := startY; cur < endY; cur += dash + gap {
-		segEnd := cur + dash
-		if segEnd > endY {
-			segEnd = endY
-		}
-		var p clip.Path
-		p.Begin(ops)
-		p.MoveTo(f32.Pt(x, cur))
-		p.LineTo(f32.Pt(x, segEnd))
-		paint.FillShape(ops, col, clip.Stroke{Path: p.End(), Width: width}.Op())
-	}
-}
-
-func drawFilledArrow(ops *op.Ops, tipX, tipY float32, pointingRight bool, col color.NRGBA) {
-	var p clip.Path
-	p.Begin(ops)
-	p.MoveTo(f32.Pt(tipX, tipY))
-	if pointingRight {
-		p.LineTo(f32.Pt(tipX-9, tipY-4))
-		p.LineTo(f32.Pt(tipX-9, tipY+4))
-	} else {
-		p.LineTo(f32.Pt(tipX+9, tipY-4))
-		p.LineTo(f32.Pt(tipX+9, tipY+4))
-	}
+	p.MoveTo(f32.Pt(x0+radius, y0))
+	p.LineTo(f32.Pt(x1-radius, y0))
+	p.CubeTo(f32.Pt(x1-radius+c, y0), f32.Pt(x1, y0+radius-c), f32.Pt(x1, y0+radius))
+	p.LineTo(f32.Pt(x1, y1-radius))
+	p.CubeTo(f32.Pt(x1, y1-radius+c), f32.Pt(x1-radius+c, y1), f32.Pt(x1-radius, y1))
+	p.LineTo(f32.Pt(x0+radius, y1))
+	p.CubeTo(f32.Pt(x0+radius-c, y1), f32.Pt(x0, y1-radius+c), f32.Pt(x0, y1-radius))
+	p.LineTo(f32.Pt(x0, y0+radius))
+	p.CubeTo(f32.Pt(x0, y0+radius-c), f32.Pt(x0+radius-c, y0), f32.Pt(x0+radius, y0))
 	p.Close()
-	paint.FillShape(ops, col, clip.Outline{Path: p.End()}.Op())
-}
-
-func drawOpenArrow(ops *op.Ops, tipX, tipY float32, pointingRight bool, col color.NRGBA) {
-	var p clip.Path
-	p.Begin(ops)
-	if pointingRight {
-		p.MoveTo(f32.Pt(tipX-8, tipY-4))
-		p.LineTo(f32.Pt(tipX, tipY))
-		p.LineTo(f32.Pt(tipX-8, tipY+4))
-	} else {
-		p.MoveTo(f32.Pt(tipX+8, tipY-4))
-		p.LineTo(f32.Pt(tipX, tipY))
-		p.LineTo(f32.Pt(tipX+8, tipY+4))
-	}
-	paint.FillShape(ops, col, clip.Stroke{Path: p.End(), Width: 1.5}.Op())
+	return p.End()
 }

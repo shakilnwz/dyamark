@@ -10,10 +10,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"dyamark/seq"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/pelletier/go-toml/v2"
 )
+
+// defaultRounding is used when hyprctl can't be asked.
+const defaultRounding = 10
 
 // Theme holds the application UI palette, desktop rounding, and diagram theme.
 type Theme struct {
@@ -27,26 +33,7 @@ type Theme struct {
 	Colors            [16]color.NRGBA
 	Rounding          int
 
-	Seq SeqTheme
-}
-
-// SeqTheme defines colors and style for Mermaid sequence diagram elements.
-type SeqTheme struct {
-	ActorBkg         color.NRGBA
-	ActorBorder      color.NRGBA
-	ActorText        color.NRGBA
-	Lifeline         color.NRGBA
-	Signal           color.NRGBA
-	SignalText       color.NRGBA
-	ActivationBkg    color.NRGBA
-	ActivationBorder color.NRGBA
-	NoteBkg          color.NRGBA
-	NoteBorder       color.NRGBA
-	NoteText         color.NRGBA
-	FrameBkg         color.NRGBA
-	FrameBorder      color.NRGBA
-	FrameText        color.NRGBA
-	Rounding         float32
+	Seq seq.Theme
 }
 
 // RawOmarchyColors maps the keys in ~/.local/state/omarchy/current/theme/colors.toml
@@ -84,7 +71,7 @@ type HyprlandOption struct {
 }
 
 // DefaultTheme returns the fallback dark theme with #FFD60A accent.
-func DefaultTheme() *Theme {
+func DefaultTheme(rounding int) *Theme {
 	t := &Theme{
 		Background:        hexColor("#0b0f19", 255),
 		Foreground:        hexColor("#e6edf3", 255),
@@ -93,68 +80,60 @@ func DefaultTheme() *Theme {
 		Cursor:            hexColor("#e6edf3", 255),
 		SelectionBg:       hexColor("#2f3746", 255),
 		SelectionFg:       hexColor("#ffffff", 255),
-		Rounding:          10,
+		Rounding:          rounding,
 	}
 	t.deriveSeqTheme()
 	return t
 }
 
-// GetHyprlandRounding queries hyprctl for decoration:rounding.
-func GetHyprlandRounding() int {
-	out, err := exec.Command("hyprctl", "getoption", "decoration:rounding", "-j").Output()
-	if err != nil {
-		return 10
-	}
-	var opt HyprlandOption
-	if err := json.Unmarshal(out, &opt); err != nil {
-		return 10
-	}
-	if opt.Int > 0 {
-		return opt.Int
-	}
-	return 10
-}
-
-// LoadTheme reads colors from the Omarchy path if present, otherwise returns the default theme.
-func LoadTheme() *Theme {
+// OmarchyDir is the directory Omarchy swaps the current theme into.
+func OmarchyDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return DefaultTheme()
+		return "", err
 	}
+	return filepath.Join(home, ".local", "state", "omarchy", "current"), nil
+}
 
-	colorsPath := filepath.Join(home, ".local", "state", "omarchy", "current", "theme", "colors.toml")
+// HyprlandRounding asks hyprctl for decoration:rounding. ok is false when
+// hyprctl isn't there or its answer can't be read; zero is a valid answer.
+func HyprlandRounding() (rounding int, ok bool) {
+	out, err := exec.Command("hyprctl", "getoption", "decoration:rounding", "-j").Output()
+	if err != nil {
+		return defaultRounding, false
+	}
+	var opt HyprlandOption
+	if err := json.Unmarshal(out, &opt); err != nil || opt.Int < 0 {
+		return defaultRounding, false
+	}
+	return opt.Int, true
+}
+
+// LoadTheme reads colors.toml at colorsPath, falling back to the default
+// theme for anything missing or unreadable.
+func LoadTheme(colorsPath string, rounding int) *Theme {
+	t := DefaultTheme(rounding)
 	data, err := os.ReadFile(colorsPath)
 	if err != nil {
-		return DefaultTheme()
+		return t
 	}
-
 	var raw RawOmarchyColors
 	if err := toml.Unmarshal(data, &raw); err != nil {
-		return DefaultTheme()
+		return t
 	}
 
-	t := DefaultTheme()
-	if raw.Background != "" {
-		t.Background = hexColor(raw.Background, 255)
+	set := func(dst *color.NRGBA, hex string) {
+		if hex != "" {
+			*dst = hexColor(hex, 255)
+		}
 	}
-	if raw.Foreground != "" {
-		t.Foreground = hexColor(raw.Foreground, 255)
-	}
-	if raw.Accent != "" {
-		t.Accent = hexColor(raw.Accent, 255)
-	}
-	if raw.LighterBackground != "" {
-		t.LighterBackground = hexColor(raw.LighterBackground, 255)
-	}
-	if raw.Cursor != "" {
-		t.Cursor = hexColor(raw.Cursor, 255)
-	}
-	if raw.SelectionBackground != "" {
-		t.SelectionBg = hexColor(raw.SelectionBackground, 255)
-	}
-	if raw.SelectionForeground != "" {
-		t.SelectionFg = hexColor(raw.SelectionForeground, 255)
-	}
+	set(&t.Background, raw.Background)
+	set(&t.Foreground, raw.Foreground)
+	set(&t.Accent, raw.Accent)
+	set(&t.LighterBackground, raw.LighterBackground)
+	set(&t.Cursor, raw.Cursor)
+	set(&t.SelectionBg, raw.SelectionBackground)
+	set(&t.SelectionFg, raw.SelectionForeground)
 
 	rawColors := []string{
 		raw.Color0, raw.Color1, raw.Color2, raw.Color3,
@@ -163,108 +142,143 @@ func LoadTheme() *Theme {
 		raw.Color12, raw.Color13, raw.Color14, raw.Color15,
 	}
 	for i, c := range rawColors {
-		if c != "" {
-			t.Colors[i] = hexColor(c, 255)
-		}
+		set(&t.Colors[i], c)
+	}
+	// Only the background was given: derive a lighter one, so actor boxes
+	// still stand out from the page.
+	if raw.Background != "" && raw.LighterBackground == "" {
+		t.LighterBackground = mix(t.Background, t.Foreground, 0.08)
 	}
 
-	t.Rounding = GetHyprlandRounding()
 	t.deriveSeqTheme()
 	return t
 }
 
 func (t *Theme) deriveSeqTheme() {
-	r := float32(t.Rounding)
-	if r <= 0 {
-		r = 6
-	}
-
-	// Actor background and border
-	actorBkg := t.LighterBackground
-	if actorBkg.A == 0 {
-		actorBkg = t.Background
-	}
-
-	// Notes: use warm yellow / amber (color11 or color3 or #ffd166)
-	noteBkg := hexColor("#3d3514", 240)
-	noteBorder := hexColor("#ffd166", 255)
+	// Notes use the theme's yellow, falling back to amber.
+	noteAccent := hexColor("#ffd166", 255)
 	if t.Colors[3].A != 0 {
-		noteBorder = t.Colors[3]
+		noteAccent = t.Colors[3]
 	}
 	if t.Colors[11].A != 0 {
-		noteBorder = t.Colors[11]
+		noteAccent = t.Colors[11]
 	}
 
-	t.Seq = SeqTheme{
-		ActorBkg:         actorBkg,
+	t.Seq = seq.Theme{
+		ActorBkg:         t.LighterBackground,
 		ActorBorder:      t.Accent,
 		ActorText:        t.Foreground,
-		Lifeline:         hexColorAlpha(t.Foreground, 110),
+		Lifeline:         withAlpha(t.Foreground, 110),
 		Signal:           t.Accent,
 		SignalText:       t.Foreground,
-		ActivationBkg:    hexColorAlpha(t.Accent, 60),
+		ActivationBkg:    withAlpha(t.Accent, 60),
 		ActivationBorder: t.Accent,
-		NoteBkg:          noteBkg,
-		NoteBorder:       noteBorder,
-		NoteText:         hexColor("#fff3c4", 255),
-		FrameBkg:         hexColorAlpha(t.LighterBackground, 90),
-		FrameBorder:      hexColorAlpha(t.Accent, 180),
-		FrameText:        t.Accent,
-		Rounding:         r,
+		// Mixed from the page colour, so notes read on light themes too.
+		NoteBkg:     mix(t.Background, noteAccent, 0.18),
+		NoteBorder:  noteAccent,
+		NoteText:    t.Foreground,
+		FrameBkg:    withAlpha(t.LighterBackground, 90),
+		FrameBorder: withAlpha(t.Accent, 180),
+		FrameText:   t.Background,
+		Rounding:    float32(t.Rounding),
 	}
 }
 
-// WatchTheme monitors the Omarchy theme directory and notifies onChange whenever colors.toml is updated.
-func WatchTheme(onChange func(*Theme)) (*fsnotify.Watcher, error) {
-	home, err := os.UserHomeDir()
+// ThemeWatcher reloads the theme when Omarchy switches or retints it.
+//
+// omarchy-theme-set replaces current/theme wholesale (rm -rf, then mv), which
+// silently drops any watch on that directory, and then writes
+// current/theme.name. So the parent is watched for the swap, and the theme
+// directory is watched again after each swap for later edits to colors.toml.
+type ThemeWatcher struct {
+	watcher  *fsnotify.Watcher
+	dir      string
+	rounding int
+	onChange func(*Theme)
+
+	mu    sync.Mutex
+	timer *time.Timer
+}
+
+// themeReloadDelay batches the burst of events a theme switch makes.
+const themeReloadDelay = 100 * time.Millisecond
+
+// WatchTheme calls onChange with a freshly loaded theme after each change
+// under dir (Omarchy's current/ directory).
+func WatchTheme(dir string, rounding int, onChange func(*Theme)) (*ThemeWatcher, error) {
+	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
-
-	themeDir := filepath.Join(home, ".local", "state", "omarchy", "current", "theme")
-	if _, err := os.Stat(themeDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("theme directory does not exist: %w", err)
+	if err := w.Add(dir); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("watching %s: %w", dir, err)
 	}
+	tw := &ThemeWatcher{watcher: w, dir: dir, rounding: rounding, onChange: onChange}
+	tw.watchThemeDir()
+	go tw.run()
+	return tw, nil
+}
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return nil, err
+// Close stops watching.
+func (tw *ThemeWatcher) Close() error {
+	tw.mu.Lock()
+	if tw.timer != nil {
+		tw.timer.Stop()
 	}
+	tw.mu.Unlock()
+	return tw.watcher.Close()
+}
 
-	var mu sync.Mutex
-	rearmWatcher := func() {
-		mu.Lock()
-		defer mu.Unlock()
-		_ = watcher.Add(themeDir)
-	}
+func (tw *ThemeWatcher) themeDir() string { return filepath.Join(tw.dir, "theme") }
 
-	rearmWatcher()
+// watchThemeDir (re-)adds the theme directory. Adding a path that is
+// already watched is a no-op, and a missing directory is picked up after
+// the next swap.
+func (tw *ThemeWatcher) watchThemeDir() {
+	_ = tw.watcher.Add(tw.themeDir())
+}
 
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				// Theme switches frequently replace the directory or file
-				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
-					newTheme := LoadTheme()
-					if onChange != nil {
-						onChange(newTheme)
-					}
-					// Re-arm watcher in case the target was replaced
-					rearmWatcher()
-				}
-			case _, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
+func (tw *ThemeWatcher) run() {
+	for {
+		select {
+		case ev, ok := <-tw.watcher.Events:
+			if !ok {
+				return
 			}
+			if tw.relevant(ev) {
+				tw.scheduleReload()
+			}
+		case err, ok := <-tw.watcher.Errors:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "dyamark: theme watcher: %v\n", err)
 		}
-	}()
+	}
+}
 
-	return watcher, nil
+func (tw *ThemeWatcher) relevant(ev fsnotify.Event) bool {
+	switch filepath.Dir(ev.Name) {
+	case tw.dir:
+		base := filepath.Base(ev.Name)
+		return base == "theme" || base == "theme.name"
+	case tw.themeDir():
+		return filepath.Base(ev.Name) == "colors.toml" && !ev.Has(fsnotify.Remove)
+	}
+	return false
+}
+
+func (tw *ThemeWatcher) scheduleReload() {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	if tw.timer != nil {
+		tw.timer.Stop()
+	}
+	tw.timer = time.AfterFunc(themeReloadDelay, func() {
+		tw.watchThemeDir()
+		tw.onChange(LoadTheme(filepath.Join(tw.themeDir(), "colors.toml"), tw.rounding))
+	})
 }
 
 func hexColor(hex string, alpha uint8) color.NRGBA {
@@ -296,11 +310,13 @@ func hexColor(hex string, alpha uint8) color.NRGBA {
 	return color.NRGBA{R: 200, G: 200, B: 200, A: alpha}
 }
 
-func hexColorAlpha(c color.NRGBA, a uint8) color.NRGBA {
-	return color.NRGBA{
-		R: c.R,
-		G: c.G,
-		B: c.B,
-		A: a,
-	}
+func withAlpha(c color.NRGBA, a uint8) color.NRGBA {
+	c.A = a
+	return c
+}
+
+// mix blends b into a by t (0 gives a, 1 gives b), keeping a's alpha.
+func mix(a, b color.NRGBA, t float32) color.NRGBA {
+	lerp := func(x, y uint8) uint8 { return uint8(float32(x) + (float32(y)-float32(x))*t + 0.5) }
+	return color.NRGBA{R: lerp(a.R, b.R), G: lerp(a.G, b.G), B: lerp(a.B, b.B), A: a.A}
 }

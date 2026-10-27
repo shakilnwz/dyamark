@@ -1,0 +1,41 @@
+seq/parse started as a copy of github.com/julianshen/mmgo (MIT, LICENSE.mmgo):
+
+  commit  77988c9e285db08eb0f249c927fcdcb0a89370b7 (2026-05-16)
+  files   pkg/parser/sequence/parser.go       -> parse.go
+          pkg/parser/sequence/parser_test.go  -> parse_test.go
+          pkg/diagram/sequence.go             -> ast.go
+          pkg/parser/{comment,frontmatter}.go -> folded into parse.go, config.go
+
+Behaviour follows Mermaid 12.0.0 (MIT, ../LICENSE.mermaid), the version
+bundled with the mmdc used for the parity tests:
+
+  tag     mermaid@12.0.0 (56a69eab4ecb78d453fedd713b7d473efa27207a)
+  files   packages/mermaid/src/diagrams/sequence/parser/sequenceDiagram.jison
+          packages/mermaid/src/diagrams/sequence/sequenceDb.ts
+          packages/mermaid/src/preprocess.ts, utils.ts (directives, entities)
+          packages/mermaid/src/diagram-api/frontmatter.ts
+
+mermaid_test.go ports cases from sequenceDiagram.spec.js at that tag.
+
+Changes from mmgo:
+- Source is a string; line numbers count from the first source line,
+  frontmatter included, and every item, block, box and participant has one.
+  Errors are *Error with a Line.
+- Statements end at `;` as well as a newline, `#` starts a comment, keywords
+  are case-insensitive, and only whole-line `%%` comments are comments
+  (`50%% done` in a label stays), as in Mermaid.
+- Frontmatter `config:` and %%{init}%% / %%{wrap}%% directives become
+  Diagram.Config, merged as Mermaid merges them.
+- wrap:/nowrap: prefixes, <br> line breaks and #59;-style entity codes in
+  labels.
+- autonumber is a positional item with decimal start/step and `off`.
+- Typed participants (`@{ "type": "database" }`), inline aliases, half
+  arrows, `()` central connections, par_over, link/links/properties.
+- Mermaid's errors: deactivating an inactive participant, a create or
+  destroy without its message, re-creating a participant, a participant in
+  two boxes, anything but declarations inside a box.
+- Mermaid's leniency: destroying a participant not yet mentioned, destroying
+  twice, autonumber 0.
+- Box colours follow Mermaid's parseBoxData (a CSS colour word or function,
+  else transparent and the whole line is the label); rect keeps the whole
+  line as its colour and has no label.
