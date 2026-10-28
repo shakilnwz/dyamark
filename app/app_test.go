@@ -244,6 +244,35 @@ func TestReloadKeepsViewerPlace(t *testing.T) {
 	}
 }
 
+// A broken diagram in a newly opened file has no last good drawing to show
+// under its error; the previous file's diagram isn't one.
+func TestOpenFileForgetsLastGood(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.md")
+	second := filepath.Join(dir, "second.md")
+	if err := os.WriteFile(first, []byte("```mermaid\n"+sampleMMD1+"\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("```mermaid\nsequenceDiagram\nloop Unclosed\nA->>B: hi\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{FilePath: first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { a.fileWatcher.Close() }()
+	if err := a.OpenFile(second); err != nil {
+		t.Fatal(err)
+	}
+	s := a.doc.Sequences[0]
+	if s.Error == nil {
+		t.Fatal("expected the diagram to fail")
+	}
+	if s.LastGood != nil {
+		t.Error("the previous file's diagram is shown as this one's last good drawing")
+	}
+}
+
 // A reload queued for a file that has since been replaced is dropped.
 func TestStaleReloadIgnored(t *testing.T) {
 	dir := t.TempDir()

@@ -71,6 +71,14 @@ func (c *DiagramCache) GetOrLayout(source string, blockIndex int) (*parse.Diagra
 	return ast, diag, nil, diag
 }
 
+// ClearLastGood forgets the last good layout of every diagram position. Call
+// it when another file is opened, whose diagrams those layouts aren't.
+func (c *DiagramCache) ClearLastGood() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clear(c.lastGood)
+}
+
 // RenderMmdc renders a non-sequence Mermaid diagram with mmdc, caching the
 // output PNG on disk in ~/.cache/dyamark/.
 // The cache lock isn't held while mmdc runs, which can take seconds, so

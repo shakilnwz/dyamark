@@ -270,6 +270,7 @@ func (a *App) OpenFile(filePath string) error {
 	a.opts.FilePath = filePath
 	a.window.Option(app.Title(fmt.Sprintf("%s — dyamark", filepath.Base(filePath))))
 
+	a.cache.ClearLastGood()
 	doc := markdown.Parse(data, a.cache)
 	a.doc = doc
 	a.mdView.SetDocument(doc)
