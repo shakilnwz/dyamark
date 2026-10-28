@@ -1,7 +1,9 @@
 package app
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -89,4 +91,54 @@ func (fw *FileWatcher) scheduleReload() {
 			fw.onReload(data)
 		}
 	})
+}
+
+// SaveFile writes data to path atomically: into path.dyamark-tmp beside
+// it, synced to disk, then renamed over path. A reader, or a crash, sees
+// the old file or the new one, never half of it. An existing file keeps
+// its mode, and a symlink keeps pointing at the file it names.
+func SaveFile(path string, data []byte) (err error) {
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
+	mode := fs.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
+	tmp := path + ".dyamark-tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(tmp)
+		}
+	}()
+	_, err = f.Write(data)
+	if err == nil {
+		// The umask may have narrowed the mode the file was made with.
+		err = f.Chmod(mode)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// Sync the directory too, so the rename itself survives a crash.
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		dir.Sync()
+		dir.Close()
+	}
+	return nil
 }
