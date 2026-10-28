@@ -44,4 +44,52 @@ everything in the plan's v1 list, plus typed participants, half arrows,
 central connections, `par_over`, links and properties. Every item carries
 its source line. Its accept/reject decisions are checked against `mmdc`.
 
-Not yet: layout, drawing from the parser, the Markdown view, editing.
+**Phase 2 (layout, SVG, parity):** done. `seq/layout` is a port of
+Mermaid's sequence renderer; on all 39 diagrams in `seq/testdata` every
+box, line and label is within 2 px of what `mmdc` draws.
+
+**Phase 3 (drawing, viewer):** done. Diagrams are drawn natively with Gio.
+The fullscreen viewer zooms at the pointer, pans, fits, keeps the
+participant row pinned while scrolling, and toggles sequence numbers.
+
+**Phase 4 (Markdown view):** done. The whole document is drawn, with
+sequence diagrams inline, parse errors over the last good drawing, other
+Mermaid types as source with `R` to render them through `mmdc`, and live
+reload when the file changes.
+
+**Phase 5 (editing):** done.
+
+- `Ctrl+E` shows the source, `Ctrl+\` puts it beside the rendered view,
+  which follows the typing 80 ms after it stops. Only the diagrams that
+  changed are laid out again.
+- Saves are atomic, and a document with a file saves itself a second after
+  typing stops. Untitled drafts are only saved when asked.
+- A change on disk is taken in quietly when there are no edits here, and
+  otherwise asks which version to keep.
+- `Ctrl+O` and `Ctrl+Shift+S` use the desktop's file dialogs
+  (xdg-desktop-portal). Closing the window with an unsaved draft asks first.
+- `E` in the viewer jumps to that diagram's source.
+
+Memory is over the plan's budget: about 105–112 MB RSS, mostly Mesa's
+libraries; Go's own heap is about 10 MB.
+
+Not yet: phases 6–8 in [PLAN.md](PLAN.md).
+
+## Keys
+
+| Key | Action |
+|---|---|
+| `Ctrl+O` | Open |
+| `Ctrl+S` / `Ctrl+Shift+S` | Save / save as |
+| `Ctrl+E` | Source / view |
+| `Ctrl+\` | Source and view side by side |
+| `Tab` / `Shift+Tab` | Move between diagrams |
+| `Enter` / click | Open the diagram viewer |
+| `+` `-` `0` `1` `W` `H` | Zoom, fit, 100 %, fit width / height (viewer) |
+| `[` `]` | Previous / next diagram (viewer) |
+| `N` | Toggle sequence numbers (viewer) |
+| `E` | Edit this diagram's source (viewer) |
+| `R` | Render another Mermaid diagram type with `mmdc` |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Text size |
+| `Esc` | Close the viewer, or cancel a question |
+| `Ctrl+Q` | Quit |

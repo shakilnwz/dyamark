@@ -6,7 +6,6 @@ import (
 	"image"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,22 +21,31 @@ import (
 	"gioui.org/app"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/io/system"
 	"gioui.org/io/transfer"
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/text"
 	"gioui.org/unit"
+	"gioui.org/widget"
 	"gioui.org/widget/material"
 )
 
-// Mode represents whether the app is in document view mode or fullscreen viewer mode.
+// Mode is what the window shows.
 type Mode int
 
 const (
+	// ModeInline is the rendered document.
 	ModeInline Mode = iota
+	// ModeViewer is one diagram, fullscreen.
 	ModeViewer
+	// ModeEdit is the source.
+	ModeEdit
+	// ModeSplit is the source beside the rendered document.
+	ModeSplit
 )
 
 // Options holds configuration passed from main/CLI flags.
@@ -77,6 +85,34 @@ type App struct {
 	// viewerPos is the place, among all the document's sequence
 	// diagrams, of the one the viewer shows.
 	viewerPos int
+	// backMode is the mode the viewer goes back to when it closes.
+	backMode Mode
+
+	// editor holds the document's text.
+	editor widget.Editor
+	// saved is the text as last read from or written to the file, and
+	// parsed the text the view shows.
+	saved, parsed string
+	// dirty is set while the editor has edits that aren't saved.
+	dirty bool
+	// parseAt and saveAt are when the view is laid out again and the file
+	// saved after typing stops; zero when nothing is waiting.
+	parseAt, saveAt time.Time
+	// conflict is the file's text when it changed on disk while the editor
+	// had edits, until one of them is chosen.
+	conflict *string
+	// prompt is the question shown over the window, if any.
+	prompt *Prompt
+	// notice is a message shown at the bottom until noticeUntil.
+	notice      string
+	noticeUntil time.Time
+	// focusEditor asks for the editor to take the keyboard next frame.
+	focusEditor bool
+	// dialogOpen is set while a portal file dialog is up.
+	dialogOpen bool
+	// quitting is set once closing with unsaved work was agreed to.
+	quitting bool
+	title    string
 }
 
 // DefaultSampleMarkdown is shown when dyamark is launched without arguments.
@@ -110,6 +146,10 @@ deactivate API Gateway
 
 ## Shortcuts
 
+- **Ctrl+E**: Edit the source / back to the view
+- **Ctrl+\\**: Source and view side by side
+- **Ctrl+S** / **Ctrl+Shift+S**: Save / save as
+- **Ctrl+O**: Open a file
 - **Enter** or **Click**: Open diagram in fullscreen viewer
 - **0** / **1** / **W** / **H**: Fit to window / 100% / Fit width / Fit height (in viewer)
 - **+** / **-** or **Scroll**: Zoom in / out at pointer
@@ -122,14 +162,8 @@ func New(opts Options) (*App, error) {
 	// Match app ID to dyamark.desktop on Wayland / Hyprland
 	app.ID = "dyamark"
 
-	title := "dyamark"
-	if opts.FilePath != "" {
-		title = fmt.Sprintf("%s — dyamark", filepath.Base(opts.FilePath))
-	}
-
 	w := new(app.Window)
 	w.Option(
-		app.Title(title),
 		app.Size(unit.Dp(900), unit.Dp(640)),
 		app.MinSize(unit.Dp(450), unit.Dp(350)),
 	)
@@ -150,13 +184,21 @@ func New(opts Options) (*App, error) {
 
 	cache := markdown.NewDiagramCache()
 	source := []byte(DefaultSampleMarkdown)
+	newFile := false
 	if opts.FilePath != "" {
 		data, err := os.ReadFile(opts.FilePath)
-		if err == nil {
+		switch {
+		case err == nil:
 			source = data
-		} else {
+		case errors.Is(err, fs.ErrNotExist):
+			// A file to be: it's made on the first save.
+			source = nil
+			newFile = true
+		default:
 			fmt.Fprintf(os.Stderr, "dyamark: opening %s: %v\n", opts.FilePath, err)
 			source = []byte(fmt.Sprintf("# Error: Cannot open file\n\n`%s`\n\n%v\n", opts.FilePath, err))
+			// Never save over a file that couldn't be read.
+			opts.FilePath = ""
 		}
 	}
 
@@ -182,6 +224,9 @@ func New(opts Options) (*App, error) {
 	if len(doc.Blocks) == 1 && len(doc.Sequences) == 1 && len(initialASTs) > 0 {
 		initMode = ModeViewer
 	}
+	if newFile {
+		initMode = ModeEdit
+	}
 
 	a := &App{
 		window: w,
@@ -196,8 +241,13 @@ func New(opts Options) (*App, error) {
 
 		fullShaper: make(chan *text.Shaper, 1),
 	}
+	a.load(source)
+	a.parsed = string(source)
+	a.focusEditor = a.editing()
+	a.updateTitle()
 
 	mdView.OnOpenViewer = func(block *markdown.SequenceBlock) {
+		a.flushParse()
 		var asts []*parse.Diagram
 		selectedIdx := 0
 		for i, seq := range a.doc.Sequences {
@@ -211,6 +261,9 @@ func New(opts Options) (*App, error) {
 		}
 		if len(asts) > 0 {
 			a.viewer.SetDiagrams(asts, selectedIdx)
+			if a.mode != ModeViewer {
+				a.backMode = a.mode
+			}
 			a.mode = ModeViewer
 			a.window.Invalidate()
 		}
@@ -231,7 +284,20 @@ func New(opts Options) (*App, error) {
 	}
 
 	viewer.OnClose = func() {
-		a.mode = ModeInline
+		a.mode = a.backMode
+		a.focusEditor = a.editing()
+		a.window.Invalidate()
+	}
+	viewer.OnEdit = func(int) {
+		pos := a.shownPos()
+		if pos < 0 {
+			return
+		}
+		if a.backMode != ModeSplit {
+			a.backMode = ModeEdit
+		}
+		a.mode = a.backMode
+		a.editAt(a.doc.Sequences[pos].StartLine)
 		a.window.Invalidate()
 	}
 
@@ -272,11 +338,11 @@ func (a *App) OpenFile(filePath string) error {
 		return err
 	}
 
-	a.opts.FilePath = filePath
-	a.window.Option(app.Title(fmt.Sprintf("%s — dyamark", filepath.Base(filePath))))
-
 	a.cache.ClearLastGood()
+	a.load(data)
+	a.parsed = string(data)
 	doc := markdown.Parse(data, a.cache)
+	a.cache.Prune()
 	a.doc = doc
 	a.mdView.SetDocument(doc)
 
@@ -292,18 +358,18 @@ func (a *App) OpenFile(filePath string) error {
 	}
 
 	ext := strings.ToLower(filepath.Ext(filePath))
-	if (ext == ".mmd" || ext == ".mermaid" || (len(doc.Blocks) == 1 && len(doc.Sequences) == 1)) && len(asts) > 0 {
+	switch {
+	case a.editing():
+		// Editing goes on in the new file.
+		a.focusEditor = true
+	case (ext == ".mmd" || ext == ".mermaid" || (len(doc.Blocks) == 1 && len(doc.Sequences) == 1)) && len(asts) > 0:
 		a.mode = ModeViewer
-	} else {
+		a.backMode = ModeInline
+	default:
 		a.mode = ModeInline
 	}
 
-	if a.fileWatcher != nil {
-		a.fileWatcher.Close()
-		a.fileWatcher = nil
-	}
-	a.fileWatcher, _ = a.watch(filePath)
-
+	a.setPath(filePath)
 	a.window.Invalidate()
 	return nil
 }
@@ -318,28 +384,36 @@ func (a *App) watch(filePath string) (*FileWatcher, error) {
 			if a.fileWatcher != fw {
 				return
 			}
-			a.reload(newData)
+			a.diskChanged(newData)
 		})
 	})
 	return fw, err
 }
 
-// reload replaces the document with newData, keeping the viewer's place.
+// shownPos returns the place, among all the document's sequence
+// diagrams, of the one the viewer shows, or -1 if it isn't one of them.
+func (a *App) shownPos() int {
+	for i, s := range a.doc.Sequences {
+		if s.AST != nil && s.AST == a.viewer.AST {
+			return i
+		}
+	}
+	return -1
+}
+
+// reload shows newData as the document, keeping the viewer's place.
 func (a *App) reload(newData []byte) {
 	// The viewer's diagram is followed by its place among all the file's
 	// diagrams: its index among those that parse shifts when one before
 	// it breaks or is fixed.
-	pos := -1
-	for i, s := range a.doc.Sequences {
-		if s.AST != nil && s.AST == a.viewer.AST {
-			pos = i
-		}
-	}
-	if pos >= 0 {
+	if pos := a.shownPos(); pos >= 0 {
 		a.viewerPos = pos
 	}
 
+	a.parsed = string(newData)
 	newDoc := markdown.Parse(newData, a.cache)
+	// Only this text's diagrams stay cached, not each version typed.
+	a.cache.Prune()
 	a.doc = newDoc
 	a.mdView.SetDocument(newDoc)
 
@@ -410,77 +484,17 @@ func (a *App) Run() error {
 		case app.DestroyEvent:
 			return e.Err
 
+		case *app.ClosingEvent:
+			a.closing(e)
+
 		case app.FrameEvent:
-			a.runPending()
 			gtx := app.NewContext(&a.ops, e)
 			select {
 			case s := <-a.fullShaper:
 				a.mTheme.Shaper = s
 			default:
 			}
-
-			for {
-				ev, ok := gtx.Event(
-					key.Filter{Required: key.ModCtrl, Name: "Q"},
-					transfer.TargetFilter{Target: a, Type: "text/uri-list"},
-				)
-				if !ok {
-					break
-				}
-				switch ev := ev.(type) {
-				case key.Event:
-					if ev.State == key.Press {
-						// Close through the window, so later phases can ask
-						// about unsaved work before it goes.
-						a.window.Perform(system.ActionClose)
-					}
-				case transfer.DataEvent:
-					if ev.Type == "text/uri-list" {
-						rc := ev.Open()
-						data, err := io.ReadAll(rc)
-						rc.Close()
-						if err == nil {
-							for _, line := range strings.Split(string(data), "\n") {
-								line = strings.TrimSpace(line)
-								if strings.HasPrefix(line, "file://") {
-									path := strings.TrimPrefix(line, "file://")
-									if u, err := url.PathUnescape(path); err == nil {
-										path = u
-									}
-									_ = a.OpenFile(path)
-									break
-								} else if line != "" && !strings.HasPrefix(line, "#") {
-									_ = a.OpenFile(line)
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-
-			theme := a.currentTheme()
-			paint.FillShape(&a.ops, theme.Background, clip.Rect(image.Rectangle{Max: e.Size}).Op())
-
-			// Register whole window area for drag-and-drop file target
-			dropArea := clip.Rect(image.Rectangle{Max: e.Size}).Push(gtx.Ops)
-			event.Op(gtx.Ops, a)
-			dropArea.Pop()
-
-			if a.mode == ModeViewer && a.viewer != nil {
-				a.viewer.Layout(gtx, a.mTheme, theme)
-			} else if a.mdView != nil {
-				mdTh := &markdown.Theme{
-					Background:        theme.Background,
-					Foreground:        theme.Foreground,
-					Accent:            theme.Accent,
-					LighterBackground: theme.LighterBackground,
-					Rounding:          theme.Rounding,
-					Seq:               theme.Seq,
-				}
-				a.mdView.Layout(gtx, a.mTheme, mdTh)
-			}
-
+			a.frame(gtx)
 			e.Frame(gtx.Ops)
 
 			if !firstFrameDone {
@@ -491,6 +505,201 @@ func (a *App) Run() error {
 			}
 		}
 	}
+}
+
+// closing decides whether the window may close: edits to a file are saved
+// first, and closing an untitled draft or one at odds with its file asks.
+func (a *App) closing(e *app.ClosingEvent) {
+	if a.quitting || !a.isDirty() {
+		return
+	}
+	if a.opts.FilePath != "" && a.conflict == nil && a.saveTo(a.opts.FilePath) {
+		return
+	}
+	e.Abort()
+	a.whenSaved(a.quit)
+	a.window.Invalidate()
+}
+
+// frame handles a frame's input and draws it.
+func (a *App) frame(gtx layout.Context) {
+	a.runPending()
+	a.tick(gtx.Now)
+	if a.prompt == nil {
+		a.shortcuts(gtx)
+	}
+
+	theme := a.currentTheme()
+	size := gtx.Constraints.Max
+	paint.FillShape(gtx.Ops, theme.Background, clip.Rect(image.Rectangle{Max: size}).Op())
+
+	// Register whole window area for drag-and-drop file target
+	dropArea := clip.Rect(image.Rectangle{Max: size}).Push(gtx.Ops)
+	event.Op(gtx.Ops, a)
+	dropArea.Pop()
+
+	// Under a prompt the window takes no input.
+	under := gtx
+	if a.prompt != nil {
+		under = gtx.Disabled()
+	}
+	mdTh := &markdown.Theme{
+		Background:        theme.Background,
+		Foreground:        theme.Foreground,
+		Accent:            theme.Accent,
+		LighterBackground: theme.LighterBackground,
+		Rounding:          theme.Rounding,
+		Seq:               theme.Seq,
+	}
+	switch a.mode {
+	case ModeViewer:
+		a.viewer.Layout(under, a.mTheme, theme)
+	case ModeEdit:
+		a.layoutEditor(under, theme, true)
+	case ModeSplit:
+		a.layoutSplit(under, theme, mdTh)
+	default:
+		a.mdView.NoPlainKeys = gtx.Focused(&a.editor)
+		a.mdView.Layout(under, a.mTheme, mdTh)
+	}
+
+	if a.prompt != nil {
+		a.layoutPrompt(gtx, theme)
+	}
+	if a.notice != "" {
+		a.layoutNotice(gtx, theme)
+	}
+	// Wake up for the parse, save or notice waiting on typing to stop.
+	if next := a.tick(gtx.Now); !next.IsZero() {
+		gtx.Execute(op.InvalidateCmd{At: next})
+	}
+}
+
+// layoutSplit draws the source on the left and the view on the right.
+func (a *App) layoutSplit(gtx layout.Context, theme *Theme, mdTh *markdown.Theme) {
+	size := gtx.Constraints.Max
+	half := size.X / 2
+	left := gtx
+	left.Constraints = layout.Exact(image.Pt(half, size.Y))
+	a.layoutEditor(left, theme, false)
+
+	paint.FillShape(gtx.Ops, withAlpha(theme.Foreground, 40),
+		clip.Rect(image.Rect(half, 0, half+1, size.Y)).Op())
+
+	right := gtx
+	right.Constraints = layout.Exact(image.Pt(size.X-half-1, size.Y))
+	off := op.Offset(image.Pt(half+1, 0)).Push(gtx.Ops)
+	// A click in the view lets go of the editor, so the view's own keys
+	// work again.
+	for {
+		ev, ok := gtx.Event(pointer.Filter{Target: &a.mdView, Kinds: pointer.Press})
+		if !ok {
+			break
+		}
+		if _, ok := ev.(pointer.Event); ok {
+			gtx.Execute(key.FocusCmd{})
+		}
+	}
+	area := clip.Rect(image.Rectangle{Max: right.Constraints.Max}).Push(gtx.Ops)
+	event.Op(gtx.Ops, &a.mdView)
+	a.mdView.NoPlainKeys = gtx.Focused(&a.editor)
+	a.mdView.Layout(right, a.mTheme, mdTh)
+	area.Pop()
+	off.Pop()
+}
+
+// shortcuts handles the keys that work everywhere, and dropped files.
+func (a *App) shortcuts(gtx layout.Context) {
+	filters := []event.Filter{
+		key.Filter{Required: key.ModCtrl, Name: "Q"},
+		key.Filter{Required: key.ModCtrl, Name: "O"},
+		key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "S"},
+		key.Filter{Required: key.ModCtrl, Name: "E"},
+		key.Filter{Required: key.ModCtrl, Name: "\\"},
+		transfer.TargetFilter{Target: a, Type: "text/uri-list"},
+	}
+	if a.mode == ModeEdit {
+		// The view, which handles text size, isn't laid out.
+		filters = append(filters,
+			key.Filter{Required: key.ModCtrl, Name: "="},
+			key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "+"},
+			key.Filter{Required: key.ModCtrl, Name: "-"},
+			key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "_"},
+			key.Filter{Required: key.ModCtrl, Name: "0"},
+		)
+	}
+	for {
+		ev, ok := gtx.Event(filters...)
+		if !ok {
+			break
+		}
+		switch ev := ev.(type) {
+		case key.Event:
+			if ev.State == key.Press {
+				a.shortcut(ev)
+			}
+		case transfer.DataEvent:
+			rc := ev.Open()
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				break
+			}
+			for line := range strings.Lines(string(data)) {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				path := line
+				if strings.HasPrefix(line, "file://") {
+					if path, err = uriPath(line); err != nil {
+						break
+					}
+				}
+				a.whenSaved(func() { a.open(path) })
+				break
+			}
+		}
+	}
+}
+
+// shortcut acts on a key pressed with Ctrl.
+func (a *App) shortcut(e key.Event) {
+	switch e.Name {
+	case "Q":
+		// Close through the window, which asks about unsaved work.
+		a.window.Perform(system.ActionClose)
+	case "O":
+		a.whenSaved(a.openDialog)
+	case "S":
+		if e.Modifiers.Contain(key.ModShift) {
+			a.saveAs(nil)
+		} else {
+			a.save()
+		}
+	case "E":
+		switch a.mode {
+		case ModeEdit:
+			a.setMode(ModeInline)
+		case ModeViewer:
+			a.viewer.OnEdit(a.viewer.CurIndex)
+		default:
+			a.setMode(ModeEdit)
+		}
+	case "\\":
+		if a.mode == ModeSplit {
+			a.setMode(ModeInline)
+		} else {
+			a.setMode(ModeSplit)
+		}
+	case "=", "+":
+		a.mdView.ZoomTextIn()
+	case "-", "_":
+		a.mdView.ZoomTextOut()
+	case "0":
+		a.mdView.ResetTextZoom()
+	}
+	a.window.Invalidate()
 }
 
 // reportMetrics prints start-up time and memory after the first frame.

@@ -283,7 +283,7 @@ dyamark/
 4. **Markdown view.** *Done.* goldmark to Gio for the whole document, with sequence
    diagrams inline, error display, other Mermaid types as source, and live
    reload.
-5. **Editing.** Editor, split view with per-diagram caching, atomic save and
+5. **Editing.** *Done.* Editor, split view with per-diagram caching, atomic save and
    auto-save, external-change prompts, portal open/save.
 6. **Sequence extras.** Pinned participant row, focus-a-participant, and
    the sequence-numbers toggle.
