@@ -3,7 +3,6 @@ package layout
 import (
 	"math"
 	"strconv"
-	"strings"
 
 	"dyamark/seq/parse"
 )
@@ -16,30 +15,26 @@ const (
 )
 
 type actorLayoutData struct {
-	id          string
-	name        string
-	kind        parse.ParticipantKind
-	alias       string
-	x           float64
-	y           float64
-	stopy       float64
-	width       float64
-	height      float64
-	margin      float64
-	textHeight  float64
-	boxIndex    int
-	prevActor   string
-	nextActor   string
-	line        int
-	activations []activationEntry
-}
-
-type activationEntry struct {
-	startx float64
-	starty float64
-	stopx  float64
-	stopy  float64
-	depth  int
+	id    string
+	name  string
+	kind  parse.ParticipantKind
+	alias string
+	x     float64
+	y     float64
+	// starty is where the head is drawn, which a create message moves
+	// down; stopy is where the foot is drawn.
+	starty     float64
+	stopy      float64
+	created    bool
+	destroyed  bool
+	width      float64
+	height     float64
+	margin     float64
+	textHeight float64
+	boxIndex   int
+	prevActor  string
+	nextActor  string
+	line       int
 }
 
 type boundsTracker struct {
@@ -49,6 +44,16 @@ type boundsTracker struct {
 	stopy       *float64
 	verticalPos float64
 	boxMargin   float64
+	// loops are the frames and rect blocks open at the current position,
+	// outermost first. Each grows to hold whatever is inserted while it's
+	// open, plus a boxMargin per level of nesting, as Mermaid's
+	// bounds.sequenceItems do.
+	loops []*loopBounds
+}
+
+// loopBounds is the extent of an open frame or rect block.
+type loopBounds struct {
+	startx, stopx, starty, stopy *float64
 }
 
 func (b *boundsTracker) bumpVerticalPos(bump float64) {
@@ -59,28 +64,59 @@ func (b *boundsTracker) bumpVerticalPos(bump float64) {
 	}
 }
 
+func setMin(p **float64, v float64) {
+	if *p == nil || v < **p {
+		*p = &v
+	}
+}
+
+func setMax(p **float64, v float64) {
+	if *p == nil || v > **p {
+		*p = &v
+	}
+}
+
 func (b *boundsTracker) insert(x1, y1, x2, y2 float64) {
 	minX := math.Min(x1, x2)
 	maxX := math.Max(x1, x2)
 	minY := math.Min(y1, y2)
 	maxY := math.Max(y1, y2)
 
-	if b.startx == nil || minX < *b.startx {
-		val := minX
-		b.startx = &val
+	setMin(&b.startx, minX)
+	setMax(&b.stopx, maxX)
+	setMin(&b.starty, minY)
+	setMax(&b.stopy, maxY)
+
+	// Mermaid's updateBounds: the outermost loop gets the widest margin.
+	for i, lp := range b.loops {
+		n := float64(len(b.loops)-i) * b.boxMargin
+		setMin(&lp.starty, minY-n)
+		setMax(&lp.stopy, maxY+n)
+		setMin(&lp.startx, minX-n)
+		setMax(&lp.stopx, maxX+n)
+		setMin(&b.startx, minX-n)
+		setMax(&b.stopx, maxX+n)
+		setMin(&b.starty, minY-n)
+		setMax(&b.stopy, maxY+n)
 	}
-	if b.stopx == nil || maxX > *b.stopx {
-		val := maxX
-		b.stopx = &val
+}
+
+// newLoop opens a loop starting at the current position.
+func (b *boundsTracker) newLoop() *loopBounds {
+	y := b.verticalPos
+	lp := &loopBounds{starty: &y}
+	b.loops = append(b.loops, lp)
+	return lp
+}
+
+// endLoop closes the innermost loop.
+func (b *boundsTracker) endLoop() *loopBounds {
+	if len(b.loops) == 0 {
+		return nil
 	}
-	if b.starty == nil || minY < *b.starty {
-		val := minY
-		b.starty = &val
-	}
-	if b.stopy == nil || maxY > *b.stopy {
-		val := maxY
-		b.stopy = &val
-	}
+	lp := b.loops[len(b.loops)-1]
+	b.loops = b.loops[:len(b.loops)-1]
+	return lp
 }
 
 type eventKind int
@@ -108,7 +144,11 @@ type layoutEvent struct {
 	fill       string
 	label      string
 	autoNumber *parse.AutoNumber
-	line       int
+	// create and destroy name the participant a message creates or
+	// destroys, from the `create` / `destroy` statement before it.
+	create  string
+	destroy string
+	line    int
 }
 
 // Layout translates a parsed sequence diagram AST into laid-out geometry.
@@ -168,6 +208,7 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 			width:      w,
 			height:     h,
 			textHeight: actDims.Height,
+			created:    p.Created,
 			boxIndex:   p.BoxIndex,
 			line:       p.Line,
 		}
@@ -271,6 +312,11 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 		}
 	}
 	cfg.Height = math.Max(rowMaxHeight, cfg.Height)
+	// Every actor takes the row's height, so their lifelines start on one
+	// line.
+	for _, a := range actors {
+		a.height = math.Max(a.height, cfg.Height)
+	}
 
 	// Box calculations
 	type boxData struct {
@@ -349,10 +395,17 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 			prevMargin += boxModels[boxIdx].margin
 		}
 
+		// A created actor is drawn beside the message that creates it, so
+		// leave room for half of it.
+		if a.created {
+			prevMargin += a.width / 2
+		}
+
 		a.x = prevWidth + prevMargin
 		a.y = bounds.verticalPos
+		a.starty = bounds.verticalPos
 
-		bounds.insert(a.x, bounds.verticalPos, a.x+a.width, a.y+a.height)
+		bounds.insert(a.x, bounds.verticalPos, a.x+a.width, a.height)
 
 		prevWidth += a.width + prevMargin
 		if boxIdx >= 0 {
@@ -364,45 +417,182 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 
 	bounds.bumpVerticalPos(rowMaxHeight)
 
-	// Helper to get activation bounds for an actor
-	getActivationBounds := func(actID string) (float64, float64) {
-		act := actors[actID]
-		if act == nil {
-			return 0, 0
-		}
-		mid := act.x + act.width/2
-		left := mid - 1
-		right := mid + 1
-		for _, e := range act.activations {
-			if e.stopy == 0 { // currently active
-				left = math.Min(left, e.startx)
-				right = math.Max(right, e.stopx)
-			}
+	// Activations open at the current position, per participant, in the
+	// order they started. Both passes below track them.
+	type openActivation struct {
+		startx, stopx, starty float64
+		depth                 int
+	}
+	active := map[string][]openActivation{}
+
+	activationBounds := func(id string) (float64, float64) {
+		a := actors[id]
+		mid := a.x + a.width/2
+		left, right := mid-1, mid+1
+		for _, e := range active[id] {
+			left = math.Min(left, e.startx)
+			right = math.Max(right, e.stopx)
 		}
 		return left, right
 	}
-
-	getActiveCount := func(actID string) int {
-		act := actors[actID]
-		if act == nil {
-			return 0
+	startActivation := func(id string) {
+		a := actors[id]
+		n := len(active[id])
+		x := a.x + a.width/2 + float64(n-1)*cfg.ActivationWidth/2
+		active[id] = append(active[id], openActivation{
+			startx: x,
+			stopx:  x + cfg.ActivationWidth,
+			starty: bounds.verticalPos + 2,
+			depth:  n,
+		})
+	}
+	endActivation := func(id string) (openActivation, bool) {
+		stack := active[id]
+		if len(stack) == 0 {
+			return openActivation{}, false
 		}
-		cnt := 0
-		for _, e := range act.activations {
-			if e.stopy == 0 {
-				cnt++
+		e := stack[len(stack)-1]
+		active[id] = stack[:len(stack)-1]
+		return e, true
+	}
+
+	// msgModel is where a message runs, as Mermaid's buildMessageModel.
+	type msgModel struct {
+		startx, stopx        float64
+		fromBounds, toBounds float64
+		width                float64
+		label                string
+	}
+	buildMessageModel := func(msg *parse.Message) msgModel {
+		fromLeft, fromRight := activationBounds(msg.From)
+		toLeft, toRight := activationBounds(msg.To)
+		arrowToRight := fromLeft <= toLeft
+		startx, stopx := fromLeft, toRight
+		if arrowToRight {
+			startx, stopx = fromRight, toLeft
+		}
+		adjust := func(v float64) float64 {
+			if arrowToRight {
+				return -v
+			}
+			return v
+		}
+
+		if cfg.Look == LookNeo {
+			if msg.ArrowType != parse.ArrowTypeSolidNoHead {
+				stopx += adjust(3)
+			}
+			if msg.ArrowType.IsBidirectional() {
+				startx -= adjust(3)
 			}
 		}
-		return cnt
+
+		if msg.From == msg.To {
+			stopx = startx
+		} else {
+			// The first message into an activation isn't drawn to it yet,
+			// so it stops at the bar's edge.
+			if msg.Lifeline == parse.LifelineEffectActivate && math.Abs(toLeft-toRight) <= 2 {
+				stopx += adjust(cfg.ActivationWidth/2 - 1)
+			}
+			// Shorten the line so its arrowhead ends on the lifeline.
+			if !noArrowheadShortening(msg.ArrowType) {
+				stopx += adjust(3)
+			}
+			if startArrowheadShortening(msg.ArrowType) {
+				startx -= adjust(3)
+			}
+		}
+
+		boundedWidth := math.Abs(startx - stopx)
+		label := msg.Label
+		if msg.Wrap && label != "" {
+			label = m.WrapLabel(label, math.Max(boundedWidth+2*cfg.WrapPadding, cfg.Width), cfg.MessageFont())
+		}
+		width := math.Max(boundedWidth+2*cfg.WrapPadding, cfg.Width)
+		if !msg.Wrap {
+			width = math.Max(width, m.MeasureText(label, cfg.MessageFont()).Width+2*cfg.WrapPadding)
+		}
+		return msgModel{
+			startx:     startx,
+			stopx:      stopx,
+			fromBounds: math.Min(math.Min(fromLeft, fromRight), math.Min(toLeft, toRight)),
+			toBounds:   math.Max(math.Max(fromLeft, fromRight), math.Max(toLeft, toRight)),
+			width:      width,
+			label:      label,
+		}
 	}
 
-	// 2. Loop bounds precalculation
-	type loopWidthModel struct {
-		from  float64
-		to    float64
-		width float64
+	// noteModel is where a note sits, as Mermaid's buildNoteModel.
+	type noteModel struct {
+		startx, width float64
+		label         string
 	}
-	loopWidths := make(map[string]*loopWidthModel)
+	buildNoteModel := func(n *parse.Note) (noteModel, bool) {
+		if len(n.Participants) == 0 {
+			return noteModel{}, false
+		}
+		from := actors[n.Participants[0]]
+		to := actors[n.Participants[len(n.Participants)-1]]
+		if from == nil || to == nil {
+			return noteModel{}, false
+		}
+		wrap := n.Wrap && n.Text != ""
+		measure := func(maxWidth float64) TextDimensions {
+			label := n.Text
+			if wrap {
+				label = m.WrapLabel(label, maxWidth, cfg.NoteFont())
+			}
+			return m.MeasureText(label, cfg.NoteFont())
+		}
+		dims := measure(cfg.Width)
+		nm := noteModel{startx: from.x}
+
+		switch {
+		case n.Position == parse.NotePositionRight:
+			if wrap {
+				nm.width = math.Max(cfg.Width, dims.Width)
+			} else {
+				nm.width = math.Max(from.width/2+to.width/2, dims.Width+2*cfg.NoteMargin)
+			}
+			nm.startx = from.x + (from.width+cfg.ActorMargin)/2
+		case n.Position == parse.NotePositionLeft:
+			if wrap {
+				nm.width = math.Max(cfg.Width, dims.Width+2*cfg.NoteMargin)
+			} else {
+				nm.width = math.Max(from.width/2+to.width/2, dims.Width+2*cfg.NoteMargin)
+			}
+			nm.startx = from.x - nm.width + (from.width-cfg.ActorMargin)/2
+		case from == to:
+			dims = measure(math.Max(cfg.Width, from.width))
+			if wrap {
+				nm.width = math.Max(cfg.Width, from.width)
+			} else {
+				nm.width = math.Max(math.Max(from.width, cfg.Width), dims.Width+2*cfg.NoteMargin)
+			}
+			nm.startx = from.x + (from.width-nm.width)/2
+		default:
+			nm.width = math.Abs(from.x+from.width/2-(to.x+to.width/2)) + cfg.ActorMargin
+			if from.x < to.x {
+				nm.startx = from.x + from.width/2 - cfg.ActorMargin/2
+			} else {
+				nm.startx = to.x + to.width/2 - cfg.ActorMargin/2
+			}
+		}
+
+		nm.label = n.Text
+		if wrap {
+			nm.label = m.WrapLabel(n.Text, nm.width-2*cfg.WrapPadding, cfg.NoteFont())
+		}
+		return nm, true
+	}
+
+	// 2. Loop widths, which block labels wrap to. Mermaid's
+	// calculateLoopBounds, which also replays the activations.
+	type loopWidthModel struct {
+		from, to, width float64
+	}
+	loopWidths := make(map[*parse.Block]*loopWidthModel)
 	var loopStack []*loopWidthModel
 
 	for _, ev := range events {
@@ -410,76 +600,91 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 		case evBlockStart:
 			lwm := &loopWidthModel{from: math.MaxFloat64, to: -math.MaxFloat64}
 			loopStack = append(loopStack, lwm)
-			loopWidths[ev.label] = lwm
+			loopWidths[ev.block] = lwm
 		case evBlockEnd:
 			if len(loopStack) > 0 {
 				loopStack = loopStack[:len(loopStack)-1]
 			}
-		case evMessage:
-			msg := ev.msg
-			fa, ta := actors[msg.From], actors[msg.To]
-			if fa != nil && ta != nil && len(loopStack) > 0 {
-				fromLeft, fromRight := getActivationBounds(msg.From)
-				toLeft, toRight := getActivationBounds(msg.To)
-				isArrowToRight := fromLeft <= toLeft
-				startx := fromLeft
-				if isArrowToRight {
-					startx = fromRight
-				}
-				stopx := toRight
-				if isArrowToRight {
-					stopx = toLeft
-				}
-				boundedWidth := math.Abs(startx - stopx)
-				msgW := math.Max(boundedWidth+2*cfg.WrapPadding, cfg.Width)
-				for _, lwm := range loopStack {
-					lwm.from = math.Min(lwm.from, math.Min(startx, stopx))
-					lwm.to = math.Max(lwm.to, math.Max(startx, stopx))
-					lwm.width = math.Max(lwm.width, msgW) - cfg.LabelBoxWidth
-				}
+		case evActivation:
+			if actors[ev.activation.Participant] == nil {
+				continue
+			}
+			if ev.activation.Activate {
+				startActivation(ev.activation.Participant)
+			} else {
+				endActivation(ev.activation.Participant)
 			}
 		case evNote:
-			n := ev.note
-			if len(n.Participants) > 0 && len(loopStack) > 0 {
-				fa := actors[n.Participants[0]]
-				if fa != nil {
-					for _, lwm := range loopStack {
-						lwm.from = math.Min(lwm.from, fa.x)
-						lwm.to = math.Max(lwm.to, fa.x+cfg.Width)
-						lwm.width = math.Max(lwm.width, math.Abs(lwm.to-lwm.from)) - cfg.LabelBoxWidth
-					}
+			nm, ok := buildNoteModel(ev.note)
+			if !ok {
+				continue
+			}
+			for _, lwm := range loopStack {
+				lwm.from = math.Min(lwm.from, nm.startx)
+				lwm.to = math.Max(lwm.to, nm.startx+nm.width)
+				lwm.width = math.Max(lwm.width, math.Abs(lwm.from-lwm.to)) - cfg.LabelBoxWidth
+			}
+		case evMessage:
+			msg := ev.msg
+			from, to := actors[msg.From], actors[msg.To]
+			if from == nil || to == nil {
+				continue
+			}
+			mm := buildMessageModel(msg)
+			for _, lwm := range loopStack {
+				if msg.From == msg.To {
+					lwm.from = math.Min(math.Min(from.x-mm.width/2, from.x-from.width/2), lwm.from)
+					lwm.to = math.Max(math.Max(to.x+mm.width/2, to.x+from.width/2), lwm.to)
+					lwm.width = math.Max(lwm.width, math.Abs(lwm.to-lwm.from)) - cfg.LabelBoxWidth
+				} else {
+					lwm.from = math.Min(mm.startx, lwm.from)
+					lwm.to = math.Max(mm.stopx, lwm.to)
+					lwm.width = math.Max(lwm.width, mm.width) - cfg.LabelBoxWidth
 				}
 			}
 		}
 	}
+	active = map[string][]openActivation{}
+
+	// blockLabel is a block or section label as Mermaid draws it: in
+	// brackets, wrapped to the block's width.
+	blockLabel := func(label string, block *parse.Block) string {
+		label = "[" + label + "]"
+		if lwm, ok := loopWidths[block]; ok {
+			label = m.WrapLabel(label, lwm.width-2*cfg.WrapPadding, cfg.MessageFont())
+		}
+		return label
+	}
 
 	// 3. Process events
+	type section struct {
+		y     float64
+		label string
+	}
 	type frameModel struct {
 		kind     parse.BlockKind
-		starty   float64
-		stopy    float64
-		minX     float64
-		maxX     float64
-		title    string
-		dividers []float64
-		titles   []string
+		loop     *loopBounds
+		label    string
+		titled   bool
+		sections []section
 		line     int
 	}
 	var openFrames []*frameModel
 	var finishedFrames []*frameModel
 
 	type rectBlockModel struct {
-		starty float64
-		stopy  float64
-		fill   string
-		line   int
+		loop *loopBounds
+		fill string
+		line int
 	}
 	var openRects []*rectBlockModel
 	var finishedRects []*rectBlockModel
 
+	lineHeight := m.MeasureText("x", cfg.MessageFont()).Height
+
 	sequenceIndex := 1.0
 	sequenceIndexStep := 1.0
-	sequenceNumbersVisible := cfg.ShowSequenceNumbers
+	autonumberOn := false
 
 	for _, ev := range events {
 		switch ev.kind {
@@ -490,126 +695,74 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 			if ev.autoNumber.Step > 0 {
 				sequenceIndexStep = ev.autoNumber.Step
 			}
-			sequenceNumbersVisible = ev.autoNumber.Visible
+			autonumberOn = ev.autoNumber.Visible
 
 		case evActivation:
-			act := actors[ev.activation.Participant]
-			if act == nil {
+			id := ev.activation.Participant
+			if actors[id] == nil {
 				continue
 			}
 			if ev.activation.Activate {
-				stacked := getActiveCount(act.id)
-				mid := act.x + act.width/2
-				x := mid + float64(stacked-1)*cfg.ActivationWidth/2
-				if stacked == 0 {
-					x = mid - cfg.ActivationWidth/2
-				}
-				act.activations = append(act.activations, activationEntry{
-					startx: x,
-					starty: bounds.verticalPos + 2,
-					stopx:  x + cfg.ActivationWidth,
-					depth:  stacked,
-				})
-			} else {
-				// Deactivate
-				for i := len(act.activations) - 1; i >= 0; i-- {
-					if act.activations[i].stopy == 0 {
-						if act.activations[i].starty+18 > bounds.verticalPos {
-							act.activations[i].starty = bounds.verticalPos - 6
-							bounds.verticalPos += 12
-						}
-						act.activations[i].stopy = bounds.verticalPos
-						bounds.insert(act.activations[i].startx, bounds.verticalPos-10, act.activations[i].stopx, bounds.verticalPos)
-						out.Activations = append(out.Activations, Activation{
-							ID: act.id,
-							Rect: Rect{
-								X: float32(act.activations[i].startx),
-								Y: float32(act.activations[i].starty),
-								W: float32(act.activations[i].stopx - act.activations[i].startx),
-								H: float32(act.activations[i].stopy - act.activations[i].starty),
-							},
-							Depth: act.activations[i].depth,
-						})
-						break
-					}
-				}
+				startActivation(id)
+				continue
 			}
+			e, ok := endActivation(id)
+			if !ok {
+				continue
+			}
+			// A bar too short to see is stretched around the current
+			// position. Like Mermaid's activeEnd, that moves only the bar,
+			// not what follows.
+			stopy := bounds.verticalPos
+			if e.starty+18 > stopy {
+				e.starty = stopy - 6
+				stopy += 12
+			}
+			bounds.insert(e.startx, stopy-10, e.stopx, stopy)
+			out.Activations = append(out.Activations, Activation{
+				ID: id,
+				Rect: Rect{
+					X: float32(e.startx),
+					Y: float32(e.starty),
+					W: float32(e.stopx - e.startx),
+					H: float32(stopy - e.starty),
+				},
+				Depth: e.depth,
+			})
 
 		case evNote:
-			n := ev.note
-			if len(n.Participants) == 0 {
+			nm, ok := buildNoteModel(ev.note)
+			if !ok {
 				continue
 			}
-			fromID := n.Participants[0]
-			toID := n.Participants[len(n.Participants)-1]
-			fromAct := actors[fromID]
-			toAct := actors[toID]
-			if fromAct == nil || toAct == nil {
-				continue
-			}
-
 			bounds.bumpVerticalPos(cfg.BoxMargin)
 			starty := bounds.verticalPos
 
-			noteLabel := n.Text
-			if n.Wrap {
-				noteLabel = m.WrapLabel(noteLabel, cfg.Width-2*cfg.NoteMargin, cfg.NoteFont())
-			}
-			noteDims := m.MeasureText(noteLabel, cfg.NoteFont())
-			noteW := math.Max(cfg.Width, noteDims.Width+2*cfg.NoteMargin)
-			var startx float64
-
-			switch n.Position {
-			case parse.NotePositionRight:
-				noteW = math.Max((fromAct.width+toAct.width)/2, noteDims.Width+2*cfg.NoteMargin)
-				startx = fromAct.x + (fromAct.width+cfg.ActorMargin)/2
-			case parse.NotePositionLeft:
-				noteW = math.Max((fromAct.width+toAct.width)/2, noteDims.Width+2*cfg.NoteMargin)
-				startx = fromAct.x - noteW + (fromAct.width-cfg.ActorMargin)/2
-			case parse.NotePositionOver:
-				if fromID == toID {
-					noteW = math.Max(fromAct.width, noteDims.Width+2*cfg.NoteMargin)
-					startx = fromAct.x + fromAct.width/2 - noteW/2
-				} else {
-					fromCenter := fromAct.x + fromAct.width/2
-					toCenter := toAct.x + toAct.width/2
-					noteW = math.Abs(fromCenter-toCenter) + cfg.ActorMargin
-					if fromAct.x < toAct.x {
-						startx = fromCenter - cfg.ActorMargin/2
-					} else {
-						startx = toCenter - cfg.ActorMargin/2
-					}
-				}
-			}
-
+			noteDims := m.MeasureText(nm.label, cfg.NoteFont())
 			noteH := noteDims.Height + 2*cfg.NoteMargin
-			stopy := starty + noteH
 			bounds.bumpVerticalPos(noteH)
-			bounds.insert(startx, starty, startx+noteW, stopy)
+			bounds.insert(nm.startx, starty, nm.startx+nm.width, starty+noteH)
 
-			// Texts in note
-			lines := splitLineBreaks(noteLabel)
 			var texts []Text
-			curY := starty + cfg.NoteMargin
-			for _, line := range lines {
+			for i, line := range splitLineBreaks(nm.label) {
 				texts = append(texts, Text{
 					Kind:     TextNote,
-					X:        float32(startx + noteW/2),
-					Y:        float32(curY + noteDims.LineHeight/2),
+					X:        float32(math.Round(nm.startx + nm.width/2)),
+					Y:        float32(textLineY(starty, i, noteDims.LineHeight, cfg.NoteMargin)),
 					Anchor:   AnchorMiddle,
 					Baseline: BaselineMiddle,
+					DY:       float32(cfg.FontSize), // dy="1em"
 					Size:     float32(cfg.FontSize),
 					Weight:   cfg.NoteFontWeight,
 					Text:     line,
 				})
-				curY += noteDims.LineHeight
 			}
 
 			out.Notes = append(out.Notes, Note{
 				Rect: Rect{
-					X: float32(startx),
+					X: float32(nm.startx),
 					Y: float32(starty),
-					W: float32(noteW),
+					W: float32(nm.width),
 					H: float32(noteH),
 				},
 				Text: texts,
@@ -619,54 +772,50 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 		case evBlockStart:
 			bounds.bumpVerticalPos(cfg.BoxMargin)
 			fm := &frameModel{
-				kind:   ev.blockKind,
-				starty: bounds.verticalPos,
-				title:  ev.label,
-				line:   ev.line,
-				minX:   math.MaxFloat64,
-				maxX:   -math.MaxFloat64,
+				kind: ev.blockKind,
+				loop: bounds.newLoop(),
+				line: ev.line,
 			}
 			openFrames = append(openFrames, fm)
-			totalOffset := 0.0
+			post := cfg.BoxMargin + cfg.BoxTextMargin
 			if ev.label != "" {
-				labelToMeasure := "[" + ev.label + "]"
-				if lwm, ok := loopWidths[ev.label]; ok && lwm.width > 0 {
-					labelToMeasure = m.WrapLabel(labelToMeasure, lwm.width-2*cfg.WrapPadding, cfg.MessageFont())
-				}
-				textDims := m.MeasureText(labelToMeasure, cfg.MessageFont())
-				totalOffset = math.Max(textDims.Height, cfg.LabelBoxHeight)
+				fm.label = blockLabel(ev.label, ev.block)
+				fm.titled = true
+				post += math.Max(m.MeasureText(fm.label, cfg.MessageFont()).Height, cfg.LabelBoxHeight)
 			}
-			bounds.bumpVerticalPos(cfg.BoxMargin + cfg.BoxTextMargin + totalOffset)
+			bounds.bumpVerticalPos(post)
 
 		case evBlockBranch:
+			bounds.bumpVerticalPos(cfg.BoxMargin + cfg.BoxTextMargin)
+			sec := section{y: bounds.verticalPos}
+			post := cfg.BoxMargin
+			if ev.label != "" {
+				sec.label = blockLabel(ev.label, ev.block)
+				post += math.Max(m.MeasureText(sec.label, cfg.MessageFont()).Height, cfg.LabelBoxHeight)
+			}
 			if len(openFrames) > 0 {
 				top := openFrames[len(openFrames)-1]
-				top.dividers = append(top.dividers, bounds.verticalPos)
-				top.titles = append(top.titles, ev.label)
-				bounds.bumpVerticalPos(cfg.BoxMargin + cfg.BoxTextMargin)
-				totalOffset := 0.0
-				if ev.label != "" {
-					textDims := m.MeasureText(ev.label, cfg.MessageFont())
-					totalOffset = math.Max(textDims.Height, cfg.LabelBoxHeight)
-				}
-				bounds.bumpVerticalPos(cfg.BoxMargin + totalOffset)
+				top.sections = append(top.sections, sec)
 			}
+			bounds.bumpVerticalPos(post)
 
 		case evBlockEnd:
 			if len(openFrames) > 0 {
 				top := openFrames[len(openFrames)-1]
 				openFrames = openFrames[:len(openFrames)-1]
-				top.stopy = bounds.verticalPos + cfg.BoxMargin
-				bounds.bumpVerticalPos(cfg.BoxMargin)
+				bounds.endLoop()
+				if top.loop.stopy != nil {
+					bounds.bumpVerticalPos(*top.loop.stopy - bounds.verticalPos)
+				}
 				finishedFrames = append(finishedFrames, top)
 			}
 
 		case evRectStart:
 			bounds.bumpVerticalPos(cfg.BoxMargin)
 			openRects = append(openRects, &rectBlockModel{
-				starty: bounds.verticalPos,
-				fill:   ev.fill,
-				line:   ev.line,
+				loop: bounds.newLoop(),
+				fill: ev.fill,
+				line: ev.line,
 			})
 			bounds.bumpVerticalPos(cfg.BoxMargin)
 
@@ -674,8 +823,10 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 			if len(openRects) > 0 {
 				top := openRects[len(openRects)-1]
 				openRects = openRects[:len(openRects)-1]
-				top.stopy = bounds.verticalPos + cfg.BoxMargin
-				bounds.bumpVerticalPos(cfg.BoxMargin)
+				bounds.endLoop()
+				if top.loop.stopy != nil {
+					bounds.bumpVerticalPos(*top.loop.stopy - bounds.verticalPos)
+				}
 				finishedRects = append(finishedRects, top)
 			}
 
@@ -686,100 +837,22 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 			if fromAct == nil || toAct == nil {
 				continue
 			}
+			mm := buildMessageModel(msg)
+			startx, stopx := mm.startx, mm.stopx
+			self := msg.From == msg.To
 
-			bounds.bumpVerticalPos(10)
+			// Mermaid's boundMessage.
 			msgStarty := bounds.verticalPos
-
-			fromLeft, fromRight := getActivationBounds(msg.From)
-			toLeft, toRight := getActivationBounds(msg.To)
-			isArrowToRight := fromLeft <= toLeft
-
-			startx := fromLeft
-			if isArrowToRight {
-				startx = fromRight
-			}
-			stopx := toRight
-			if isArrowToRight {
-				stopx = toLeft
-			}
-
-			if cfg.Look == LookNeo {
-				offset := 3.0
-				if msg.ArrowType != parse.ArrowTypeSolidNoHead {
-					if isArrowToRight {
-						stopx -= offset
-					} else {
-						stopx += offset
-					}
-				}
-				if msg.ArrowType.IsBidirectional() {
-					if isArrowToRight {
-						startx += offset
-					} else {
-						startx -= offset
-					}
-				}
-			}
-
-			isArrowToActivation := math.Abs(toLeft-toRight) > 2
-			if msg.Lifeline == parse.LifelineEffectActivate && !isArrowToActivation {
-				adjust := cfg.ActivationWidth/2 - 1
-				if isArrowToRight {
-					stopx -= adjust
-				} else {
-					stopx += adjust
-				}
-			}
-
-			isStickArrow := msg.ArrowType == parse.ArrowTypeStickTop ||
-				msg.ArrowType == parse.ArrowTypeStickBottom ||
-				msg.ArrowType == parse.ArrowTypeStickTopDashed ||
-				msg.ArrowType == parse.ArrowTypeStickBottomDashed ||
-				msg.ArrowType == parse.ArrowTypeStickTopReverse ||
-				msg.ArrowType == parse.ArrowTypeStickBottomReverse ||
-				msg.ArrowType == parse.ArrowTypeStickTopReverseDashed ||
-				msg.ArrowType == parse.ArrowTypeStickBottomReverseDashed
-
-			if msg.ArrowType.HasArrowHead() && !isStickArrow && msg.From != msg.To {
-				if isArrowToRight {
-					stopx -= 3.0
-				} else {
-					stopx += 3.0
-				}
-				if msg.ArrowType.IsBidirectional() {
-					if isArrowToRight {
-						startx += 3.0
-					} else {
-						startx -= 3.0
-					}
-				}
-			}
-
-			if sequenceNumbersVisible {
-				startx += 6.0
-			}
-
-			boundedWidth := math.Abs(startx - stopx)
-			msgLabel := msg.Label
-			if msg.Wrap {
-				msgLabel = m.WrapLabel(msgLabel, math.Max(boundedWidth+2*cfg.WrapPadding, cfg.Width), cfg.MessageFont())
-			}
-			textDims := m.MeasureText(msgLabel, cfg.MessageFont())
-
-			lines := splitLineBreaks(msgLabel)
-			lineH := textDims.Height
-			if len(lines) > 0 {
-				lineH = textDims.Height / float64(len(lines))
-			}
+			bounds.bumpVerticalPos(10)
+			textDims := m.MeasureText(mm.label, cfg.MessageFont())
+			lines := splitLineBreaks(mm.label)
+			lineH := textDims.Height / float64(len(lines))
 			bounds.bumpVerticalPos(lineH)
+			msgHeight := lineH
 
 			totalOffset := textDims.Height - 10
 			var lineStartY float64
-
-			var path []Point
-			curved := false
-
-			if msg.From == msg.To {
+			if self {
 				lineStartY = bounds.verticalPos + totalOffset
 				if !cfg.RightAngles {
 					totalOffset += cfg.BoxMargin
@@ -787,93 +860,166 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 				}
 				totalOffset += 30
 				dx := math.Max(textDims.Width/2, cfg.Width/2)
-				bounds.insert(startx-dx, bounds.verticalPos-10+totalOffset, startx+dx, bounds.verticalPos+30+totalOffset)
-
-				curved = !cfg.RightAngles
-				if curved {
-					path = []Point{
-						{X: float32(startx), Y: float32(lineStartY)},
-						{X: float32(startx + 50), Y: float32(lineStartY - 10)},
-						{X: float32(startx + 50), Y: float32(lineStartY + 30)},
-						{X: float32(startx), Y: float32(lineStartY + 20)},
-					}
-				} else {
-					path = []Point{
-						{X: float32(startx), Y: float32(lineStartY)},
-						{X: float32(startx + 50), Y: float32(lineStartY)},
-						{X: float32(startx + 50), Y: float32(lineStartY + 20)},
-						{X: float32(startx), Y: float32(lineStartY + 20)},
-					}
-				}
+				bounds.insert(startx-dx, bounds.verticalPos-10+totalOffset, stopx+dx, bounds.verticalPos+30+totalOffset)
 			} else {
 				totalOffset += cfg.BoxMargin
 				lineStartY = bounds.verticalPos + totalOffset
 				bounds.insert(startx, lineStartY-10, stopx, lineStartY)
+			}
+			bounds.bumpVerticalPos(totalOffset)
+			msgHeight += totalOffset
+			msgStopy := msgStarty + msgHeight
+			bounds.insert(mm.fromBounds, msgStarty, mm.toBounds, msgStopy)
 
+			// Mermaid's adjustCreatedDestroyedData: a created actor's head
+			// and a destroyed actor's foot sit on the message, which stops
+			// at the actor's edge.
+			receiverAdjustment := func(a *actorLayoutData, adj float64) {
+				if a.x < fromAct.x {
+					bounds.insert(stopx-adj, msgStarty, startx, msgStopy+a.height/2+cfg.NoteMargin)
+					stopx += adj
+				} else {
+					bounds.insert(startx, msgStarty, stopx+adj, msgStopy+a.height/2+cfg.NoteMargin)
+					stopx -= adj
+				}
+			}
+			senderAdjustment := func(a *actorLayoutData, adj float64) {
+				if a.x < toAct.x {
+					bounds.insert(startx-adj, msgStarty, stopx, msgStopy+a.height/2+cfg.NoteMargin)
+					startx += adj
+				} else {
+					bounds.insert(stopx, msgStarty, startx+adj, msgStopy+a.height/2+cfg.NoteMargin)
+					startx -= adj
+				}
+			}
+			switch {
+			case ev.create == msg.To:
+				a := toAct
+				receiverAdjustment(a, edgeOffset(a)+3)
+				a.starty = lineStartY - a.height/2
+				bounds.bumpVerticalPos(a.height / 2)
+			case ev.destroy == msg.From:
+				a := fromAct
+				if cfg.MirrorActors {
+					senderAdjustment(a, edgeOffset(a))
+				}
+				a.stopy = lineStartY - a.height/2
+				a.destroyed = true
+				bounds.bumpVerticalPos(a.height / 2)
+			case ev.destroy == msg.To:
+				a := toAct
+				if cfg.MirrorActors {
+					receiverAdjustment(a, edgeOffset(a)+3)
+				}
+				a.stopy = lineStartY - a.height/2
+				a.destroyed = true
+				bounds.bumpVerticalPos(a.height / 2)
+			}
+
+			showNumber := autonumberOn || cfg.ShowSequenceNumbers
+			bidi := msg.ArrowType.IsBidirectional()
+			reverse := isReverseArrow(msg.ArrowType)
+
+			// Mermaid's drawMessage.
+			var path []Point
+			curved := false
+			if self {
+				lineStartX := startx
+				if showNumber && (reverse || bidi) {
+					lineStartX += 10
+				}
+				curved = !cfg.RightAngles
+				if curved {
+					path = []Point{
+						{X: float32(lineStartX), Y: float32(lineStartY)},
+						{X: float32(lineStartX + 60), Y: float32(lineStartY - 10)},
+						{X: float32(startx + 60), Y: float32(lineStartY + 30)},
+						{X: float32(startx), Y: float32(lineStartY + 20)},
+					}
+				} else {
+					right := startx + math.Max(cfg.Width/2, textDims.Width/2)
+					path = []Point{
+						{X: float32(lineStartX), Y: float32(lineStartY)},
+						{X: float32(right), Y: float32(lineStartY)},
+						{X: float32(right), Y: float32(lineStartY + 25)},
+						{X: float32(startx), Y: float32(lineStartY + 25)},
+					}
+				}
+			} else {
+				// The autonumber badge sits on the line's start, so the
+				// line starts after it.
+				x1, x2 := startx, stopx
+				if showNumber {
+					switch {
+					case bidi && startx < stopx:
+						x1 = startx + 2*sequenceNumberRadius
+					case bidi:
+						x1 = startx - sequenceNumberRadius
+					case reverse && stopx > startx:
+						x2 = stopx - 2*sequenceNumberRadius
+					case reverse:
+						x2 = stopx - sequenceNumberRadius
+					default:
+						x1 = startx + sequenceNumberRadius
+					}
+				}
 				path = []Point{
-					{X: float32(startx), Y: float32(lineStartY)},
-					{X: float32(stopx), Y: float32(lineStartY)},
+					{X: float32(x1), Y: float32(lineStartY)},
+					{X: float32(x2), Y: float32(lineStartY)},
 				}
 			}
 
-			bounds.bumpVerticalPos(totalOffset)
-
-			// Text placement
-			textMinX := math.Min(startx, stopx)
-			textW := math.Abs(stopx - startx)
-			textMidX := math.Round(textMinX + textW/2)
-			if msg.From == msg.To {
-				textMidX = math.Round(startx + 25)
-			}
-
+			textMidX := math.Round(math.Min(startx, stopx) + math.Abs(stopx-startx)/2)
 			var msgTexts []Text
-			curY := msgStarty + 10
-			for _, line := range lines {
+			for i, line := range lines {
 				msgTexts = append(msgTexts, Text{
 					Kind:     TextMessage,
 					X:        float32(textMidX),
-					Y:        float32(curY),
+					Y:        float32(textLineY(msgStarty+10, i, lineH, cfg.WrapPadding)),
 					Anchor:   AnchorMiddle,
 					Baseline: BaselineMiddle,
-					DY:       16, // 1em SVG dy equivalent
+					DY:       float32(cfg.FontSize), // dy="1em"
 					Size:     float32(cfg.FontSize),
 					Weight:   cfg.MessageFontWeight,
 					Text:     line,
 				})
-				curY += lineH
 			}
 
-			// Autonumber badge
 			var seqNum *SequenceNumber
-			if sequenceNumbersVisible {
-				numVal := math.Round(sequenceIndex*100) / 100
-				numStr := strings.TrimRight(strings.TrimRight(strings.ReplaceAll(string(rune(int(numVal)))+"", "\x00", ""), "0"), ".")
-				if numVal == math.Floor(numVal) {
-					numStr = strings.TrimSpace(strings.ReplaceAll(string(rune(int(numVal)))+"", "\x00", ""))
-					numStr = strings.TrimLeft(strings.TrimRight(string([]byte{byte('0' + int(numVal)%10)}), " "), " ")
-					// Standard formatting
-					numStr = mathRoundStr(numVal)
-				} else {
-					numStr = mathRoundStr(numVal)
+			if showNumber {
+				numStr := mathRoundStr(sequenceIndex)
+				leftToRight := startx <= stopx
+				var badgeX float64
+				switch {
+				case self:
+					badgeX = mm.fromBounds + 1
+				case reverse && leftToRight, !reverse && !leftToRight:
+					badgeX = mm.toBounds - 1
+				default:
+					badgeX = mm.fromBounds + 1
 				}
-
-				badgeX := float32(math.Min(startx, stopx) + 10)
-				badgeY := float32(lineStartY - 10)
+				size := float32(12)
+				if len(numStr) > 5 {
+					size = 7
+				} else if len(numStr) > 3 {
+					size = 9
+				}
 				seqNum = &SequenceNumber{
-					Center: Point{X: badgeX, Y: badgeY},
-					Radius: 6,
+					Center: Point{X: float32(badgeX), Y: float32(lineStartY)},
+					Radius: sequenceNumberRadius,
 					Text: Text{
 						Kind:     TextSequenceNumber,
-						X:        badgeX,
-						Y:        badgeY,
+						X:        float32(badgeX),
+						Y:        float32(lineStartY + 4),
 						Anchor:   AnchorMiddle,
-						Baseline: BaselineCentral,
-						Size:     10,
+						Baseline: BaselineAlphabetic,
+						Size:     size,
 						Text:     numStr,
 					},
 				}
-				sequenceIndex = math.Round((sequenceIndex+sequenceIndexStep)*100) / 100
 			}
+			// Every message counts, shown or not.
+			sequenceIndex = math.Round((sequenceIndex+sequenceIndexStep)*100) / 100
 
 			// Markers
 			endMarker := MarkerNone
@@ -917,59 +1063,7 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 	// 4. Header actors
 	for _, key := range actorKeys {
 		a := actors[key]
-		rect := Rect{
-			X: float32(a.x),
-			Y: float32(a.y),
-			W: float32(a.width),
-			H: float32(a.height),
-		}
-		var fig *StickFigure
-		if a.kind == parse.ParticipantKindActor {
-			headCenter := Point{X: float32(a.x + a.width/2), Y: float32(a.y + 15)}
-			fig = &StickFigure{
-				Head:   headCenter,
-				Radius: 10,
-				Lines: [][2]Point{
-					{headCenter, {X: headCenter.X, Y: headCenter.Y + 20}},
-					{{X: headCenter.X - 15, Y: headCenter.Y + 10}, {X: headCenter.X + 15, Y: headCenter.Y + 10}},
-					{{X: headCenter.X, Y: headCenter.Y + 20}, {X: headCenter.X - 12, Y: headCenter.Y + 35}},
-					{{X: headCenter.X, Y: headCenter.Y + 20}, {X: headCenter.X + 12, Y: headCenter.Y + 35}},
-				},
-			}
-		}
-
-		lines := splitLineBreaks(a.alias)
-		var texts []Text
-		curY := a.y + a.height/2 - float64(len(lines))*a.textHeight/2
-		for _, line := range lines {
-			texts = append(texts, Text{
-				Kind:     TextActor,
-				X:        float32(a.x + a.width/2),
-				Y:        float32(curY + a.textHeight/2),
-				Anchor:   AnchorMiddle,
-				Baseline: BaselineCentral,
-				Size:     float32(cfg.FontSize),
-				Weight:   cfg.ActorFontWeight,
-				Text:     line,
-			})
-			curY += a.textHeight
-		}
-
-		radius := float32(3)
-		if cfg.Look == LookNeo {
-			radius = 6
-		}
-
-		out.Actors = append(out.Actors, Actor{
-			ID:     a.id,
-			Kind:   a.kind,
-			Footer: false,
-			Rect:   rect,
-			Radius: radius,
-			Figure: fig,
-			Label:  texts,
-			Line:   a.line,
-		})
+		out.Actors = append(out.Actors, actorGeometry(a, a.starty, false, cfg))
 	}
 
 	// 5. Footer actors and lifelines
@@ -977,60 +1071,14 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 		bounds.bumpVerticalPos(cfg.BoxMargin * 2)
 		for _, key := range actorKeys {
 			a := actors[key]
-			a.stopy = bounds.verticalPos
-
-			rect := Rect{
-				X: float32(a.x),
-				Y: float32(a.stopy),
-				W: float32(a.width),
-				H: float32(a.height),
+			if !a.destroyed {
+				a.stopy = bounds.verticalPos
 			}
-			var fig *StickFigure
-			if a.kind == parse.ParticipantKindActor {
-				headCenter := Point{X: float32(a.x + a.width/2), Y: float32(a.stopy + 15)}
-				fig = &StickFigure{
-					Head:   headCenter,
-					Radius: 10,
-				}
-			}
-
-			lines := splitLineBreaks(a.alias)
-			var texts []Text
-			curY := a.stopy + a.height/2 - float64(len(lines))*a.textHeight/2
-			for _, line := range lines {
-				texts = append(texts, Text{
-					Kind:     TextActor,
-					X:        float32(a.x + a.width/2),
-					Y:        float32(curY + a.textHeight/2),
-					Anchor:   AnchorMiddle,
-					Baseline: BaselineCentral,
-					Size:     float32(cfg.FontSize),
-					Weight:   cfg.ActorFontWeight,
-					Text:     line,
-				})
-				curY += a.textHeight
-			}
-
-			radius := float32(3)
-			if cfg.Look == LookNeo {
-				radius = 6
-			}
-
-			out.Actors = append(out.Actors, Actor{
-				ID:     a.id,
-				Kind:   a.kind,
-				Footer: true,
-				Rect:   rect,
-				Radius: radius,
-				Figure: fig,
-				Label:  texts,
-				Line:   a.line,
-			})
-
+			out.Actors = append(out.Actors, actorGeometry(a, a.stopy, true, cfg))
 			out.Lifelines = append(out.Lifelines, Lifeline{
 				ID: a.id,
 				X:  float32(a.x + a.width/2),
-				Y1: float32(a.y + a.height),
+				Y1: float32(a.starty + a.height),
 				Y2: float32(a.stopy),
 			})
 		}
@@ -1038,11 +1086,15 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 	} else {
 		for _, key := range actorKeys {
 			a := actors[key]
+			y2 := bounds.verticalPos + a.height/2
+			if a.destroyed {
+				y2 = a.stopy + a.height/2
+			}
 			out.Lifelines = append(out.Lifelines, Lifeline{
 				ID: a.id,
 				X:  float32(a.x + a.width/2),
-				Y1: float32(a.y + a.height),
-				Y2: float32(bounds.verticalPos + a.height/2),
+				Y1: float32(a.starty + a.height),
+				Y2: float32(y2),
 			})
 		}
 	}
@@ -1060,16 +1112,7 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 
 		var lblTexts []Text
 		if bm.label != "" {
-			lblTexts = append(lblTexts, Text{
-				Kind:     TextBoxLabel,
-				X:        float32(x + w/2),
-				Y:        float32(y + 15),
-				Anchor:   AnchorMiddle,
-				Baseline: BaselineMiddle,
-				Size:     float32(cfg.FontSize),
-				Weight:   cfg.MessageFontWeight,
-				Text:     bm.label,
-			})
+			lblTexts = centredLines(bm.label, bm.x+bm.w/2, bm.y+cfg.BoxTextMargin+maxBoxTextHeight/2, TextBoxLabel, cfg)
 		}
 
 		out.Boxes = append(out.Boxes, Box{
@@ -1083,75 +1126,82 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 		bounds.bumpVerticalPos(cfg.BoxMargin)
 	}
 
-	// 7. Finalize Frames
+	// 7. Finalize Frames, as Mermaid's drawLoop
+	// fallbackX spans every actor, for a block with nothing in it.
+	fallbackX := func(lp *loopBounds) (float64, float64) {
+		if lp.startx != nil && lp.stopx != nil {
+			return *lp.startx, *lp.stopx
+		}
+		var x0, x1 float64
+		if bounds.startx != nil && bounds.stopx != nil {
+			x0, x1 = *bounds.startx+cfg.BoxMargin, *bounds.stopx-cfg.BoxMargin
+		}
+		return x0, x1
+	}
+	loopY := func(lp *loopBounds) (float64, float64) {
+		y0 := *lp.starty
+		y1 := y0
+		if lp.stopy != nil {
+			y1 = *lp.stopy
+		}
+		return y0, y1
+	}
+
+	tabW := math.Max(cfg.LabelBoxWidth, 50)
+	tabH := cfg.LabelBoxHeight
+	if cfg.Look == LookNeo {
+		tabH += 15
+	}
 	for _, fm := range finishedFrames {
-		// Frame covers all actors by default or enclosed items
-		frameX := bounds.startx
-		frameStopX := bounds.stopx
-		if frameX == nil || frameStopX == nil {
-			continue
-		}
-		x := *frameX + cfg.BoxMargin
-		w := (*frameStopX - *frameX) - 2*cfg.BoxMargin
-		y := fm.starty
-		h := fm.stopy - fm.starty
+		startx, stopx := fallbackX(fm.loop)
+		starty, stopy := loopY(fm.loop)
 
-		tabW := cfg.LabelBoxWidth
-		tabH := cfg.LabelBoxHeight
+		const cut = 7.0
 		tab := []Point{
-			{X: float32(x), Y: float32(y)},
-			{X: float32(x + tabW), Y: float32(y)},
-			{X: float32(x + tabW), Y: float32(y + tabH - 6)},
-			{X: float32(x + tabW - 6), Y: float32(y + tabH)},
-			{X: float32(x), Y: float32(y + tabH)},
+			{X: float32(startx), Y: float32(starty)},
+			{X: float32(startx + tabW), Y: float32(starty)},
+			{X: float32(startx + tabW), Y: float32(starty + tabH - cut)},
+			{X: float32(startx + tabW - cut*1.2), Y: float32(starty + tabH)},
+			{X: float32(startx), Y: float32(starty + tabH)},
 		}
 
-		var frameTexts []Text
-		keyword := fm.kind.String()
-		frameTexts = append(frameTexts, Text{
+		frameTexts := []Text{{
 			Kind:     TextFrameKeyword,
-			X:        float32(x + tabW/2 - 2),
-			Y:        float32(y + tabH/2),
+			X:        float32(math.Round(startx + tabW/2)),
+			Y:        float32(textLineY(starty+tabH/2, 0, 0, cfg.BoxTextMargin)),
 			Anchor:   AnchorMiddle,
 			Baseline: BaselineMiddle,
-			Size:     float32(cfg.FontSize - 2),
+			Size:     float32(cfg.FontSize),
 			Weight:   700,
-			Text:     keyword,
-		})
-
-		if fm.title != "" {
-			frameTexts = append(frameTexts, Text{
-				Kind:     TextFrameTitle,
-				X:        float32(x + tabW + 10),
-				Y:        float32(y + tabH/2),
-				Anchor:   AnchorStart,
-				Baseline: BaselineMiddle,
-				Size:     float32(cfg.FontSize - 2),
-				Weight:   400,
-				Text:     fm.title,
-			})
+			Text:     fm.kind.String(),
+		}}
+		addLines := func(kind TextKind, label string, x, y float64) {
+			for i, line := range splitLineBreaks(label) {
+				frameTexts = append(frameTexts, Text{
+					Kind:     kind,
+					X:        float32(x),
+					Y:        float32(textLineY(y, i, lineHeight, cfg.BoxTextMargin)),
+					Anchor:   AnchorMiddle,
+					Baseline: BaselineAlphabetic,
+					Size:     float32(cfg.FontSize),
+					Weight:   cfg.MessageFontWeight,
+					Text:     line,
+				})
+			}
 		}
+		addLines(TextFrameTitle, fm.label, startx+cfg.LabelBoxWidth/2+(stopx-startx)/2, starty+cfg.BoxMargin+cfg.BoxTextMargin)
 
 		var dividers []float32
-		for i, divY := range fm.dividers {
-			dividers = append(dividers, float32(divY))
-			if i < len(fm.titles) && fm.titles[i] != "" {
-				frameTexts = append(frameTexts, Text{
-					Kind:     TextSectionTitle,
-					X:        float32(x + 10),
-					Y:        float32(divY + 12),
-					Anchor:   AnchorStart,
-					Baseline: BaselineMiddle,
-					Size:     float32(cfg.FontSize - 2),
-					Weight:   400,
-					Text:     fm.titles[i],
-				})
+		for _, sec := range fm.sections {
+			dividers = append(dividers, float32(sec.y))
+			if sec.label != "" {
+				addLines(TextSectionTitle, sec.label, startx+(stopx-startx)/2, sec.y+cfg.BoxMargin+cfg.BoxTextMargin)
 			}
 		}
 
 		out.Frames = append(out.Frames, Frame{
 			Kind:     fm.kind,
-			Rect:     Rect{X: float32(x), Y: float32(y), W: float32(w), H: float32(h)},
+			Rect:     Rect{X: float32(startx), Y: float32(starty), W: float32(stopx - startx), H: float32(stopy - starty)},
 			Tab:      tab,
 			Dividers: dividers,
 			Texts:    frameTexts,
@@ -1161,21 +1211,16 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 
 	// 8. Finalize Rect Backgrounds
 	for _, rm := range finishedRects {
-		frameX := bounds.startx
-		frameStopX := bounds.stopx
-		if frameX == nil || frameStopX == nil {
-			continue
-		}
-		x := *frameX + cfg.BoxMargin
-		w := (*frameStopX - *frameX) - 2*cfg.BoxMargin
+		startx, stopx := fallbackX(rm.loop)
+		starty, stopy := loopY(rm.loop)
 		out.Rects = append(out.Rects, Background{
-			Rect: Rect{X: float32(x), Y: float32(rm.starty), W: float32(w), H: float32(rm.stopy - rm.starty)},
+			Rect: Rect{X: float32(startx), Y: float32(starty), W: float32(stopx - startx), H: float32(stopy - starty)},
 			Fill: rm.fill,
 			Line: rm.line,
 		})
 	}
 
-	// 9. Diagram Title
+	// 9. Diagram Title, start-anchored where Mermaid puts it.
 	if d.Title != "" {
 		startX := 0.0
 		stopX := 0.0
@@ -1185,14 +1230,13 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 		if bounds.stopx != nil {
 			stopX = *bounds.stopx
 		}
-		titleX := (stopX - startX) / 2
 		out.Title = &Text{
 			Kind:     TextTitle,
-			X:        float32(titleX),
+			X:        float32((stopX-startX)/2 - 2*cfg.DiagramMarginX),
 			Y:        -25,
-			Anchor:   AnchorMiddle,
-			Baseline: BaselineMiddle,
-			Size:     float32(cfg.FontSize + 2),
+			Anchor:   AnchorStart,
+			Baseline: BaselineAlphabetic,
+			Size:     float32(cfg.FontSize),
 			Weight:   700,
 			Text:     d.Title,
 		}
@@ -1246,14 +1290,22 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 
 func flattenItems(items []parse.Item) []layoutEvent {
 	var events []layoutEvent
+	var create, destroy string
 	for _, it := range items {
 		switch {
+		case it.Create != nil:
+			create = *it.Create
+		case it.Destroy != nil:
+			destroy = *it.Destroy
 		case it.Message != nil:
 			events = append(events, layoutEvent{
-				kind: evMessage,
-				msg:  it.Message,
-				line: it.Line,
+				kind:    evMessage,
+				msg:     it.Message,
+				create:  create,
+				destroy: destroy,
+				line:    it.Line,
 			})
+			create, destroy = "", ""
 			if it.Message.Lifeline == parse.LifelineEffectActivate {
 				events = append(events, layoutEvent{
 					kind: evActivation,
@@ -1309,6 +1361,7 @@ func flattenItems(items []parse.Item) []layoutEvent {
 			} else {
 				events = append(events, layoutEvent{
 					kind:      evBlockStart,
+					block:     b,
 					label:     b.Label,
 					line:      b.Line,
 					blockKind: b.Kind,
@@ -1317,6 +1370,7 @@ func flattenItems(items []parse.Item) []layoutEvent {
 				for _, br := range b.Branches {
 					events = append(events, layoutEvent{
 						kind:      evBlockBranch,
+						block:     b,
 						label:     br.Label,
 						line:      br.Line,
 						blockKind: b.Kind,
@@ -1325,6 +1379,7 @@ func flattenItems(items []parse.Item) []layoutEvent {
 				}
 				events = append(events, layoutEvent{
 					kind:      evBlockEnd,
+					block:     b,
 					line:      b.EndLine,
 					blockKind: b.Kind,
 				})
@@ -1336,4 +1391,145 @@ func flattenItems(items []parse.Item) []layoutEvent {
 
 func mathRoundStr(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// sequenceNumberRadius is the autonumber badge's radius.
+const sequenceNumberRadius = 6.0
+
+// actorTypeWidth is the width Mermaid gives the icon-shaped participants
+// when a message stops at their edge.
+const actorTypeWidth = 18 * 2
+
+// edgeOffset is how far a create or destroy message stops short of the
+// actor's centre.
+func edgeOffset(a *actorLayoutData) float64 {
+	switch a.kind {
+	case parse.ParticipantKindActor, parse.ParticipantKindControl,
+		parse.ParticipantKindEntity, parse.ParticipantKindDatabase:
+		return actorTypeWidth / 2
+	}
+	return a.width / 2
+}
+
+// noArrowheadShortening reports the arrows Mermaid doesn't pull back from
+// the lifeline: those with no head at their end.
+func noArrowheadShortening(t parse.ArrowType) bool {
+	switch t {
+	case parse.ArrowTypeSolidNoHead, parse.ArrowTypeDashedNoHead,
+		parse.ArrowTypeStickTop, parse.ArrowTypeStickBottom,
+		parse.ArrowTypeStickTopDashed, parse.ArrowTypeStickBottomDashed:
+		return true
+	}
+	return isReverseArrow(t)
+}
+
+// startArrowheadShortening reports the arrows with a head at their start.
+func startArrowheadShortening(t parse.ArrowType) bool {
+	switch t {
+	case parse.ArrowTypeSolidBi, parse.ArrowTypeDashedBi,
+		parse.ArrowTypeSolidTopReverse, parse.ArrowTypeSolidBottomReverse,
+		parse.ArrowTypeSolidTopReverseDashed, parse.ArrowTypeSolidBottomReverseDashed:
+		return true
+	}
+	return false
+}
+
+func isReverseArrow(t parse.ArrowType) bool {
+	switch t {
+	case parse.ArrowTypeSolidTopReverse, parse.ArrowTypeSolidBottomReverse,
+		parse.ArrowTypeStickTopReverse, parse.ArrowTypeStickBottomReverse,
+		parse.ArrowTypeSolidTopReverseDashed, parse.ArrowTypeSolidBottomReverseDashed,
+		parse.ArrowTypeStickTopReverseDashed, parse.ArrowTypeStickBottomReverseDashed:
+		return true
+	}
+	return false
+}
+
+// textLineY is the y of line i of a text block whose first line Mermaid's
+// drawText centres at y with the given margin: each line moves down by
+// the height of the ones before it.
+func textLineY(y float64, i int, lineHeight, margin float64) float64 {
+	return math.Round(y + float64(i)*lineHeight + margin/2)
+}
+
+// centredLines lays out label as Mermaid's byTspan does: one text per
+// line, centred on (x, y), with the lines spread a font size apart.
+func centredLines(label string, x, y float64, kind TextKind, cfg Config) []Text {
+	lines := splitLineBreaks(label)
+	var texts []Text
+	for i, line := range lines {
+		texts = append(texts, Text{
+			Kind:     kind,
+			X:        float32(x),
+			Y:        float32(y),
+			Anchor:   AnchorMiddle,
+			Baseline: BaselineCentral,
+			DY:       float32(float64(i)*cfg.FontSize - cfg.FontSize*float64(len(lines)-1)/2),
+			Size:     float32(cfg.FontSize),
+			Weight:   cfg.ActorFontWeight,
+			Text:     line,
+		})
+	}
+	return texts
+}
+
+// Stick-figure geometry from Mermaid's drawActorTypeActor, in units down
+// from the top of its classic box.
+const (
+	actorGlyphTop    = -5.0
+	actorGlyphBottom = 60.0
+	actorGlyphHeight = actorGlyphBottom - actorGlyphTop
+)
+
+// actorGeometry is a participant's head (or, for footer, foot) at y.
+func actorGeometry(a *actorLayoutData, y float64, footer bool, cfg Config) Actor {
+	radius := float32(3)
+	if cfg.Look == LookNeo {
+		radius = 6
+	}
+	act := Actor{
+		ID:     a.id,
+		Kind:   a.kind,
+		Footer: footer,
+		Rect:   Rect{X: float32(a.x), Y: float32(y), W: float32(a.width), H: float32(a.height)},
+		Radius: radius,
+		Line:   a.line,
+	}
+	center := a.x + a.width/2
+	labelY := y + a.height/2
+
+	if a.kind == parse.ParticipantKindActor {
+		// Under neo the figure fills the glyph band above its label;
+		// classic draws it at the legacy coordinates.
+		scale := 1.0
+		glyphBottom := y + actorGlyphBottom
+		labelY = y + 35 + a.height/2
+		if cfg.Look == LookNeo {
+			scale = GlyphBandHeight / actorGlyphHeight
+			if footer {
+				glyphBottom = y + LabelLifelineGap + GlyphBandHeight
+				labelY = glyphBottom + GlyphLabelGap + a.textHeight/2
+			} else {
+				lifelineStart := y + a.height
+				glyphBottom = lifelineStart - LabelLifelineGap - a.textHeight - GlyphLabelGap
+				labelY = lifelineStart - LabelLifelineGap - a.textHeight/2
+			}
+		}
+		gy := func(o float64) float32 { return float32(glyphBottom - (actorGlyphBottom-o)*scale) }
+		gx := func(o float64) float32 { return float32(center + o*scale) }
+		c := float32(center)
+		act.Figure = &StickFigure{
+			Head:   Point{X: c, Y: gy(10)},
+			Radius: float32(15 * scale),
+			Lines: [][2]Point{
+				{{X: c, Y: gy(25)}, {X: c, Y: gy(45)}},
+				{{X: gx(-actorTypeWidth / 2), Y: gy(33)}, {X: gx(actorTypeWidth / 2), Y: gy(33)}},
+				{{X: gx(-actorTypeWidth / 2), Y: gy(60)}, {X: c, Y: gy(45)}},
+				{{X: c, Y: gy(45)}, {X: gx(actorTypeWidth/2 - 2), Y: gy(60)}},
+			},
+		}
+	}
+
+	act.Label = centredLines(a.alias, center, labelY, TextActor, cfg)
+	return act
 }

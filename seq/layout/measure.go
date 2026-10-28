@@ -168,11 +168,13 @@ func (m *DefaultMeasurer) WrapLabel(label string, maxWidth float64, f Font) stri
 		nextLen := m.measureLineWidth(nextLine, f)
 
 		if wordLen > maxWidth {
+			// Too long for any line: hyphenate it, as Mermaid's breakString.
 			if nextLine != "" {
 				completedLines = append(completedLines, nextLine)
-				nextLine = ""
 			}
-			completedLines = append(completedLines, word)
+			hyphenated, rest := m.breakString(word, maxWidth, f)
+			completedLines = append(completedLines, hyphenated...)
+			nextLine = rest
 		} else if nextLen+wordLen >= maxWidth && nextLine != "" {
 			completedLines = append(completedLines, nextLine)
 			nextLine = word
@@ -193,4 +195,26 @@ func (m *DefaultMeasurer) WrapLabel(label string, maxWidth float64, f Font) stri
 		return label
 	}
 	return strings.Join(completedLines, "<br/>")
+}
+
+// breakString splits a word too wide for maxWidth into hyphenated pieces,
+// returning them and the remainder, which starts the next line.
+func (m *DefaultMeasurer) breakString(word string, maxWidth float64, f Font) ([]string, string) {
+	chars := []rune(word)
+	var lines []string
+	current := ""
+	for i, r := range chars {
+		next := current + string(r)
+		if m.measureLineWidth(next, f) >= maxWidth {
+			if i == len(chars)-1 {
+				lines = append(lines, next)
+			} else {
+				lines = append(lines, next+"-")
+			}
+			current = ""
+		} else {
+			current = next
+		}
+	}
+	return lines, current
 }

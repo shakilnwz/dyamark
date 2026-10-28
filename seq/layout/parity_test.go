@@ -29,74 +29,9 @@ const parityTol = 2.0
 
 // knownDiffs lists, per diagram, the kinds that don't match Mermaid yet,
 // each a known layout gap. They're logged, not failed. A listed kind that
-// starts matching fails the test, so the list only ever shrinks.
-//
-// The gaps, as of 2026-10-28:
-//   - message-text: every message label is 5px lower than Mermaid's, and a
-//     self message's label is at startx+25 instead of startx.
-//   - message: self-message control points are at startx+50, not +60.
-//   - note-text: note lines are 2.5px higher than Mermaid's.
-//   - frame, frame-tab, frame-text, divider, rect: frames and rect
-//     backgrounds span the whole diagram instead of the participants
-//     inside them, the frame title is left-aligned instead of centred,
-//     and dividers sit 15px high.
-//   - seqnum: the autonumber badge is at min(startx, stopx)+10, lineY-10
-//     instead of startx, lineY.
-//   - title: centred on the diagram instead of Mermaid's start-anchored
-//     x = width/2 - 2*diagramMarginX.
-//   - box-label: 3.5px higher than Mermaid's.
-//   - actor-label: lines of a multi-line name are 34px apart, not 16px.
-//   - frame-text: section labels aren't put in [brackets], else / and /
-//     option labels aren't wrapped to the frame's width.
-//   - seqnum: the counter doesn't advance while autonumber is off.
-//   - 33: a deactivate pushes everything after it 12px down.
-//   - 35: create and destroy aren't laid out.
-//   - 38: a word wider than the wrap width isn't broken.
-//   - 39: a wrapped note is as wide as the actors, not max(width, text).
-//
-// The kinds after a gap in the same diagram (lifeline, actor-bottom,
-// viewbox) move with it, so they're listed too.
-var knownDiffs = map[string][]string{
-	"01-basic":                   {"message-text"},
-	"02-aliases":                 {"message-text"},
-	"03-arrows-solid-open":       {"message-text"},
-	"04-arrows-cross-point":      {"message-text"},
-	"05-arrows-bidirectional":    {"message-text"},
-	"06-arrow-half-solid":        {"message-text"},
-	"07-arrow-half-stick":        {"message-text"},
-	"08-activations-inline":      {"message-text"},
-	"09-activations-explicit":    {"message", "message-text"},
-	"10-activations-stacked":     {"message", "message-text"},
-	"11-self-message":            {"message", "message-text"},
-	"12-self-message-dotted":     {"message", "message-text"},
-	"13-note-right":              {"message-text", "note-text"},
-	"14-note-left":               {"message-text", "note-text"},
-	"15-note-over-single":        {"message-text", "note-text"},
-	"16-note-over-two":           {"message-text", "note-text"},
-	"17-loop":                    {"frame", "frame-tab", "frame-text", "message-text"},
-	"18-alt-else":                {"divider", "frame", "frame-tab", "frame-text", "message-text"},
-	"19-opt":                     {"frame", "frame-tab", "frame-text", "message-text"},
-	"20-par-and":                 {"divider", "frame", "frame-tab", "frame-text", "message-text"},
-	"21-critical-option":         {"divider", "frame", "frame-tab", "frame-text", "message-text"},
-	"22-break":                   {"frame", "frame-tab", "frame-text", "message-text"},
-	"23-rect":                    {"message-text", "rect"},
-	"24-boxes":                   {"box-label", "message-text"},
-	"25-autonumber":              {"message-text", "seqnum"},
-	"26-autonumber-custom":       {"message-text", "seqnum"},
-	"27-title":                   {"message-text", "title"},
-	"28-multiline-message":       {"message-text"},
-	"29-multiline-actor":         {"actor-label", "message-text"},
-	"30-multiline-note":          {"message-text", "note-text"},
-	"31-nested-blocks":           {"divider", "frame", "frame-tab", "frame-text", "message-text"},
-	"32-complex-auth":            {"divider", "frame", "frame-tab", "frame-text", "message-text", "note-text", "seqnum"},
-	"33-deactivate-then-message": {"actor-bottom", "actor-label", "lifeline", "message", "message-text", "viewbox"},
-	"34-autonumber-off":          {"message-text", "seqnum"},
-	"35-create-destroy":          {"actor-bottom", "actor-label", "actor-top", "lifeline", "message", "message-text", "viewbox"},
-	"36-frames-partial-width":    {"frame", "frame-tab", "frame-text", "message-text"},
-	"37-else-long-label":         {"actor-bottom", "actor-label", "divider", "frame", "frame-tab", "frame-text", "lifeline", "message", "message-text", "viewbox"},
-	"38-wrap-long-word":          {"actor-bottom", "actor-label", "actor-top", "lifeline", "message", "message-text", "viewbox"},
-	"39-wrap-note":               {"message-text", "note", "note-text"},
-}
+// starts matching fails the test, so the list only ever shrinks. Empty
+// means every diagram in seq/testdata matches.
+var knownDiffs = map[string][]string{}
 
 // item is one element: a label for the report and the numbers compared.
 type item struct {
@@ -399,9 +334,15 @@ func refGeometry(data []byte) (geometry, error) {
 		g.add("seqnum", texts[i].label, append(anchors[i].v, texts[i].v...)...)
 	}
 
-	// Actor labels are matched to the participant they follow.
-	for i := range g["actor-label"] {
-		g["actor-label"][i].label += "/" + strconv.Itoa(countBefore(g["actor-label"], i))
+	// Actor labels are matched to the participant they follow, numbered
+	// by line.
+	labels := g["actor-label"]
+	counts := make([]int, len(labels))
+	for i := range labels {
+		counts[i] = countBefore(labels, i)
+	}
+	for i := range labels {
+		labels[i].label += "/" + strconv.Itoa(counts[i])
 	}
 
 	g.normalise()
