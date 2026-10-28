@@ -104,14 +104,16 @@ func (v *Viewer) SetDiagrams(diagrams []*parse.Diagram, index int) {
 }
 
 // ReloadDiagrams swaps in a new version of the same diagrams, after the
-// file is saved. When index is still the current diagram, it keeps its
-// zoom, pan and N toggle; otherwise it's like SetDiagrams.
+// file is saved. index is where the diagram being shown is now, which
+// moves when one before it stops or starts parsing; it keeps its zoom,
+// pan and N toggle.
 func (v *Viewer) ReloadDiagrams(diagrams []*parse.Diagram, index int) {
-	if index != v.CurIndex || index < 0 || index >= len(diagrams) {
+	if index < 0 || index >= len(diagrams) {
 		v.SetDiagrams(diagrams, index)
 		return
 	}
 	v.Diagrams = diagrams
+	v.CurIndex = index
 	v.layoutAST(diagrams[index])
 }
 

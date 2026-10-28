@@ -325,3 +325,43 @@ func TestOpenViewerSkipsBrokenDiagrams(t *testing.T) {
 		t.Errorf("opened diagram %d, want the clicked one", a.viewer.CurIndex)
 	}
 }
+
+// The viewer stays on its diagram through a save that breaks or fixes
+// one before it, and keeps showing it while it's broken itself.
+func TestReloadFollowsDiagramByPlace(t *testing.T) {
+	fence := func(body string) string { return "```mermaid\nsequenceDiagram\n" + body + "\n```\n\n" }
+	good := fence("A->>B: first") + fence("C->>D: second") + fence("E->>F: third")
+	p := filepath.Join(t.TempDir(), "c.md")
+	if err := os.WriteFile(p, []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{FilePath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { a.fileWatcher.Close() }()
+
+	a.mdView.OnOpenViewer(a.doc.Sequences[2])
+	a.viewer.Zoom = 3
+	shows := func(want string) {
+		t.Helper()
+		if got := a.viewer.Diagram.Messages[0].Text[0].Text; got != want {
+			t.Errorf("viewer shows %q, want %q", got, want)
+		}
+		if a.viewer.Zoom != 3 {
+			t.Errorf("zoom reset to %f", a.viewer.Zoom)
+		}
+	}
+
+	// The first diagram breaks: the third is now the second that parses.
+	a.reload([]byte(fence("A-") + fence("C->>D: second") + fence("E->>F: third")))
+	shows("third")
+
+	// The shown diagram breaks: keep its last good drawing.
+	a.reload([]byte(fence("A-") + fence("C->>D: second") + fence("E-")))
+	shows("third")
+
+	// Both are fixed: back on the third, edited.
+	a.reload([]byte(fence("A->>B: first") + fence("C->>D: second") + fence("E->>F: third, edited")))
+	shows("third, edited")
+}

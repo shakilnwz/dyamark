@@ -73,6 +73,10 @@ type App struct {
 	// pending holds work from other goroutines that touches the document
 	// or views; it runs on the UI goroutine at the start of the next frame.
 	pending []func()
+
+	// viewerPos is the place, among all the document's sequence
+	// diagrams, of the one the viewer shows.
+	viewerPos int
 }
 
 // DefaultSampleMarkdown is shown when dyamark is launched without arguments.
@@ -196,9 +200,10 @@ func New(opts Options) (*App, error) {
 	mdView.OnOpenViewer = func(block *markdown.SequenceBlock) {
 		var asts []*parse.Diagram
 		selectedIdx := 0
-		for _, seq := range a.doc.Sequences {
+		for i, seq := range a.doc.Sequences {
 			if seq == block {
 				selectedIdx = len(asts)
+				a.viewerPos = i
 			}
 			if seq.AST != nil {
 				asts = append(asts, seq.AST)
@@ -283,6 +288,7 @@ func (a *App) OpenFile(filePath string) error {
 	}
 	if len(asts) > 0 {
 		a.viewer.SetDiagrams(asts, 0)
+		a.viewerPos = 0
 	}
 
 	ext := strings.ToLower(filepath.Ext(filePath))
@@ -320,18 +326,43 @@ func (a *App) watch(filePath string) (*FileWatcher, error) {
 
 // reload replaces the document with newData, keeping the viewer's place.
 func (a *App) reload(newData []byte) {
+	// The viewer's diagram is followed by its place among all the file's
+	// diagrams: its index among those that parse shifts when one before
+	// it breaks or is fixed.
+	pos := -1
+	for i, s := range a.doc.Sequences {
+		if s.AST != nil && s.AST == a.viewer.AST {
+			pos = i
+		}
+	}
+	if pos >= 0 {
+		a.viewerPos = pos
+	}
+
 	newDoc := markdown.Parse(newData, a.cache)
 	a.doc = newDoc
 	a.mdView.SetDocument(newDoc)
 
 	var asts []*parse.Diagram
-	for _, s := range newDoc.Sequences {
-		if s.AST != nil {
-			asts = append(asts, s.AST)
+	newIndex := -1
+	for i, s := range newDoc.Sequences {
+		if s.AST == nil {
+			continue
 		}
+		if i == a.viewerPos {
+			newIndex = len(asts)
+		}
+		asts = append(asts, s.AST)
 	}
-	if len(asts) > 0 {
-		a.viewer.ReloadDiagrams(asts, a.viewer.CurIndex)
+	switch {
+	case len(asts) == 0:
+	case newIndex >= 0:
+		a.viewer.ReloadDiagrams(asts, newIndex)
+	case a.viewerPos < len(newDoc.Sequences):
+		// The diagram being shown doesn't parse right now; keep showing
+		// its last good drawing until it does.
+	default:
+		a.viewer.SetDiagrams(asts, len(asts)-1)
 	}
 }
 
