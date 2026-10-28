@@ -35,7 +35,12 @@ func Draw(gtx layout.Context, th *material.Theme, seqTh seq.Theme, diag *layoutP
 	// 1. Background Rects
 	for _, bg := range diag.Rects {
 		r := rect(bg.Rect.X, bg.Rect.Y, bg.Rect.X+bg.Rect.W, bg.Rect.Y+bg.Rect.H)
-		fillCol := seq.ParseColor(bg.Fill, withAlpha(seqTh.FrameBkg, 80))
+		// Mermaid fills a rect with no colour in the actor background; it's
+		// drawn behind everything, so it hides nothing.
+		fillCol := seqTh.ActorBkg
+		if bg.Fill != "" {
+			fillCol = seq.ParseColor(bg.Fill, withAlpha(seqTh.FrameBkg, 80))
+		}
 		d.box(r, 0, fillCol, color.NRGBA{}, 0)
 	}
 

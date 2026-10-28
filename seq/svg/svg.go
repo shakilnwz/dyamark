@@ -60,13 +60,18 @@ func Write(w io.Writer, diag *layout.Diagram) error {
 		`.labelBox{stroke:#28253D;fill:#ffffff;}` +
 		`.loopLine{stroke-width:2px;stroke-dasharray:2,2;stroke:#28253D;}` +
 		`.labelText{fill:#28253D;stroke:none;font-family:"Liberation Sans",sans-serif;}` +
+		`text{font-family:"Liberation Sans",sans-serif;font-size:16px;}` +
+		// After .actor, which would otherwise outline the labels in white.
+		`.actor-box{fill:#28253D;stroke:none;stroke-width:0;}` +
+		`.sequenceNumberText{fill:#ffffff;font-family:sans-serif;}` +
 		`</style>`))
 
 	// 1. Background Rects
 	for _, bg := range diag.Rects {
+		// Mermaid fills a rect with no colour in the actor background.
 		fill := bg.Fill
 		if fill == "" {
-			fill = "rgba(128, 128, 128, 0.5)"
+			fill = "#eaeaea"
 		}
 		fmt.Fprintf(w, `<rect class="rect" x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s" />`,
 			bg.Rect.X, bg.Rect.Y, bg.Rect.W, bg.Rect.H, html.EscapeString(fill))
