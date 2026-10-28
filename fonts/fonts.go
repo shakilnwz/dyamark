@@ -20,15 +20,21 @@ var ItalicTTF []byte
 //go:embed LiberationSans-BoldItalic.ttf
 var BoldItalicTTF []byte
 
-//go:embed LiberationMono-Regular.ttf
+// MonoTTF is Liberation Mono with a blank glyph for the tab character,
+// four spaces wide: fonts have none, so a tab would show as a box, and the
+// text shaper never takes a control character from another font. As the
+// OFL asks of a changed font, it's renamed Dyamark Mono. fonts/README.md
+// says how it's made.
+//
+//go:embed DyamarkMono-Regular.ttf
 var MonoTTF []byte
 
 // Mono is the bundled monospace typeface, for source text and code blocks.
 // It's in the first frames, before the system fonts arrive.
-const Mono = font.Typeface("Liberation Mono")
+const Mono = font.Typeface("Dyamark Mono")
 
 // Collection returns the bundled fonts: Liberation Sans regular, bold,
-// italic and bold italic, and Liberation Mono.
+// italic and bold italic, and Dyamark Mono.
 func Collection() ([]font.FontFace, error) {
 	regFace, err := opentype.Parse(RegularTTF)
 	if err != nil {

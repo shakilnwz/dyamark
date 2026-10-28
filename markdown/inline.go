@@ -88,13 +88,7 @@ func appendInline(out *[]Span, n ast.Node, source []byte, style Style, link *Lin
 		case *ast.AutoLink:
 			appendSpan(out, string(c.Label(source)), style, &Link{URL: string(c.URL(source))})
 		case *east.TaskCheckBox:
-			// □ and ■ are in the bundled font, so the boxes show from the
-			// first frame; ☐ and ☑ would wait for the system fonts.
-			if c.IsChecked {
-				appendSpan(out, "■ ", 0, nil)
-			} else {
-				appendSpan(out, "□ ", 0, nil)
-			}
+			// The list draws the box.
 		case *ast.RawHTML:
 			// Inline HTML isn't drawn.
 		case *ast.Emphasis:
@@ -169,7 +163,7 @@ func layoutSpans(gtx layout.Context, th *material.Theme, oTheme *Theme, spans []
 			st.Font.Style = font.Italic
 		}
 		if s.Style&Code != 0 {
-			// At the same size, Liberation Mono's baseline matches the
+			// At the same size, Dyamark Mono's baseline matches the
 			// sans text's: styledtext lines runs up by their tops.
 			st.Font.Typeface = fonts.Mono
 		}

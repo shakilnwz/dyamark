@@ -229,6 +229,7 @@ declarations may go inside a `box`.
 | Key | Action |
 |---|---|
 | `Ctrl+O` | Open (portal) |
+| `Ctrl+F` | Find |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / save as |
 | `Ctrl+E` | Toggle view / edit |
 | `Ctrl+\` | Toggle split |
@@ -288,7 +289,8 @@ dyamark/
 6. **Sequence extras.** *Done.* Pinned participant row, focus-a-participant, and
    the sequence-numbers toggle.
 7. **Packaging.** PKGBUILD, `.desktop`, icon, `?` overlay, and a README with
-   a screenshot made from sample content.
+   a screenshot made from sample content. The `?` overlay is done, with the
+   fixes from the UI review (`docs/reports/2026-10-28-ui-review.md`).
 8. **Later.** `mmdc` rendering for other types, the v11 participant shapes,
    editor syntax colouring, and a headless `check` / `export` CLI (cheap,
    since `seq/svg` already exists).

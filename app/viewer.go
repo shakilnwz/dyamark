@@ -1,10 +1,12 @@
 package app
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"math"
 	"strings"
+	"time"
 
 	"dyamark/seq"
 	"dyamark/seq/draw"
@@ -53,6 +55,11 @@ type Viewer struct {
 	// notes and activations stay bright while the rest is dimmed.
 	Focus string
 
+	// infoSince is when the info line was last shown; wakeInfo shows it
+	// again at the next frame.
+	infoSince time.Time
+	wakeInfo  bool
+
 	// Callbacks
 	OnClose func()
 	OnEdit  func(index int)
@@ -75,6 +82,7 @@ func NewViewer(diagrams []*parse.Diagram, initialIndex int) *Viewer {
 func (v *Viewer) SetAST(ast *parse.Diagram) {
 	v.numbersFlipped = false
 	v.Focus = ""
+	v.wakeInfo = true
 	v.layoutAST(ast)
 	if ast != nil {
 		v.fitted = false
@@ -307,6 +315,7 @@ func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) l
 	if v.Focus != "" {
 		v.drawFocusHint(gtx, th, oTheme, size)
 	}
+	v.drawInfo(gtx, th, oTheme, size)
 
 	return layout.Dimensions{Size: size}
 }
@@ -382,6 +391,7 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 			case pointer.Move:
 				v.pointerPos = e.Position
 			case pointer.Scroll:
+				v.wakeInfo = true
 				if e.Scroll.Y < 0 {
 					v.ZoomBy(1.15, e.Position)
 					gtx.Execute(op.InvalidateCmd{})
@@ -395,6 +405,7 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 			if e.State != key.Press {
 				break
 			}
+			v.wakeInfo = true
 			p := v.pointerPos
 			if p == (f32.Point{}) {
 				p = center
@@ -469,9 +480,9 @@ func (v *Viewer) dimExcept(gtx layout.Context, th *material.Theme, seqTh seq.The
 // viewer once the diagram is scrolled up past it: the actors in it, its
 // header's height and where it puts the actors' top, in screen px. ok is
 // false while the row is still on screen by itself.
-func (v *Viewer) stickyRow() (actors []layoutPkg.Actor, headerH, top float32, ok bool) {
+func (v *Viewer) stickyRow() (actors []layoutPkg.Actor, headerH, top, scale float32, ok bool) {
 	if v.Diagram == nil {
-		return nil, 0, 0, false
+		return nil, 0, 0, 0, false
 	}
 	// The row is the heads at the top; a participant created later has
 	// its head further down, and the feet are at the bottom.
@@ -489,12 +500,22 @@ func (v *Viewer) stickyRow() (actors []layoutPkg.Actor, headerH, top float32, ok
 		}
 	}
 	if len(actors) == 0 {
-		return nil, 0, 0, false
+		return nil, 0, 0, 0, false
 	}
 	if v.Pan.Y+(rowY-v.Diagram.ViewBox.Y)*v.Zoom >= 0 {
-		return nil, 0, 0, false
+		return nil, 0, 0, 0, false
 	}
-	return actors, max((maxH+20)*v.Zoom, 44), stickyPad, true
+	// Zoomed in, the row stays at 100 % so it doesn't take the window.
+	scale = min(v.Zoom, 1)
+	return actors, max((maxH+20)*scale, 44), stickyPad, scale, true
+}
+
+// pinnedRect returns where actor a of the pinned row, drawn at scale with
+// its top at top, is on screen: centred on its lifeline.
+func (v *Viewer) pinnedRect(a layoutPkg.Actor, top, scale float32) (min, max f32.Point) {
+	cx := v.Pan.X + (a.Rect.X+a.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom
+	min = f32.Pt(cx-a.Rect.W/2*scale, top)
+	return min, min.Add(f32.Pt(a.Rect.W*scale, a.Rect.H*scale))
 }
 
 // stickyPad is the gap above the pinned participant row.
@@ -516,12 +537,11 @@ func (v *Viewer) actorAt(p f32.Point, size image.Point) string {
 		r := a.Rect
 		return q.X >= r.X && q.X <= r.X+r.W && q.Y >= r.Y && q.Y <= r.Y+r.H
 	}
-	if row, headerH, top, ok := v.stickyRow(); ok && p.Y < headerH {
+	if row, headerH, top, scale, ok := v.stickyRow(); ok && p.Y < headerH {
 		// The pinned row covers the diagram under it.
-		q := v.toDiagram(p)
-		q.Y = (p.Y-top)/v.Zoom + row[0].Rect.Y
 		for _, a := range row {
-			if in(a, q) {
+			lo, hi := v.pinnedRect(a, top, scale)
+			if p.X >= lo.X && p.X <= hi.X && p.Y >= lo.Y && p.Y <= hi.Y {
 				return a.ID
 			}
 		}
@@ -561,7 +581,7 @@ func (v *Viewer) actorLabel(id string) string {
 // drawStickyActors pins the participant row to the top of the viewer once
 // a tall diagram is scrolled up past it.
 func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh seq.Theme, oTheme *Theme, size image.Point) {
-	row, headerH, top, ok := v.stickyRow()
+	row, headerH, top, scale, ok := v.stickyRow()
 	if !ok {
 		return
 	}
@@ -569,7 +589,7 @@ func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh 
 	// Draw sticky header background strip
 	hdrRect := clip.Rect(image.Rectangle{Max: image.Pt(size.X, int(headerH))})
 	hdrClip := hdrRect.Push(gtx.Ops)
-	paint.FillShape(gtx.Ops, withAlpha(oTheme.Background, 235), hdrRect.Op())
+	paint.FillShape(gtx.Ops, oTheme.Background, hdrRect.Op())
 
 	// Bottom border for sticky header
 	sepY := headerH - 1
@@ -579,26 +599,97 @@ func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh 
 	sep.LineTo(f32.Pt(float32(size.X), sepY))
 	paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 40), clip.Stroke{Path: sep.End(), Width: 1}.Op())
 
-	// Draw pinned actors: translate X with Pan.X, keep Y fixed at the top.
-	actorTrans := op.Affine(f32.Affine2D{}.Scale(f32.Pt(0, 0), f32.Pt(v.Zoom, v.Zoom)).Offset(f32.Pt(v.Pan.X, top))).Push(gtx.Ops)
-
 	diagGtx := gtx
 	diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
-
-	// Start the viewBox at the actor row so it lands at the top.
-	vb := v.Diagram.ViewBox
-	vb.Y = row[0].Rect.Y
-	subDiag := &layoutPkg.Diagram{
-		Actors:  row,
-		ViewBox: vb,
+	// Each participant is drawn on its own over its lifeline: the row's
+	// scale can be less than the diagram's.
+	for _, a := range row {
+		lo, _ := v.pinnedRect(a, top, scale)
+		trans := op.Affine(f32.Affine2D{}.Scale(f32.Pt(0, 0), f32.Pt(scale, scale)).Offset(lo)).Push(gtx.Ops)
+		vb := v.Diagram.ViewBox
+		vb.X, vb.Y = a.Rect.X, a.Rect.Y
+		subDiag := &layoutPkg.Diagram{Actors: []layoutPkg.Actor{a}, ViewBox: vb}
+		draw.Draw(diagGtx, th, seqTh, subDiag)
+		if v.Focus != "" {
+			v.dimExcept(diagGtx, th, seqTh, subDiag, oTheme.Background)
+		}
+		trans.Pop()
 	}
-	draw.Draw(diagGtx, th, seqTh, subDiag)
-	if v.Focus != "" {
-		v.dimExcept(diagGtx, th, seqTh, subDiag, oTheme.Background)
-	}
-
-	actorTrans.Pop()
 	hdrClip.Pop()
+}
+
+// The info line shows for infoShow, then fades out over infoFade.
+const (
+	infoShow = 2500 * time.Millisecond
+	infoFade = 500 * time.Millisecond
+)
+
+// infoText returns the info line: the diagram's title, which of the
+// file's diagrams it is, the zoom, and the key for the key list.
+func (v *Viewer) infoText() string {
+	parts := []string{"Diagram"}
+	if v.AST != nil && v.AST.Title != "" {
+		parts[0] = v.AST.Title
+	}
+	if n := len(v.Diagrams); n > 1 {
+		parts = append(parts, fmt.Sprintf("%d of %d", v.CurIndex+1, n))
+	}
+	parts = append(parts, fmt.Sprintf("%d %%", int(math.Round(float64(v.Zoom*100)))), "? for keys")
+	return strings.Join(parts, " · ")
+}
+
+// infoAlpha returns how opaque the info line is at now, from 0 to 1.
+func (v *Viewer) infoAlpha(now time.Time) float32 {
+	if v.infoSince.IsZero() {
+		return 0
+	}
+	since := now.Sub(v.infoSince)
+	switch {
+	case since < infoShow:
+		return 1
+	case since < infoShow+infoFade:
+		return 1 - float32(since-infoShow)/float32(infoFade)
+	}
+	return 0
+}
+
+// drawInfo draws the info line in the bottom right corner, after a
+// diagram opens or a key or zoom, fading after a moment.
+func (v *Viewer) drawInfo(gtx layout.Context, th *material.Theme, oTheme *Theme, size image.Point) {
+	if v.wakeInfo {
+		v.wakeInfo = false
+		v.infoSince = gtx.Now
+	}
+	alpha := v.infoAlpha(gtx.Now)
+	if alpha <= 0 {
+		return
+	}
+	if since := gtx.Now.Sub(v.infoSince); since < infoShow {
+		gtx.Execute(op.InvalidateCmd{At: v.infoSince.Add(infoShow)})
+	} else {
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	fade := func(c color.NRGBA) color.NRGBA {
+		c.A = uint8(float32(c.A) * alpha)
+		return c
+	}
+	pad := gtx.Dp(8)
+	rec := op.Record(gtx.Ops)
+	lbl := material.Body2(th, v.infoText())
+	lbl.Color = fade(oTheme.Foreground)
+	lbl.MaxLines = 1
+	inner := gtx
+	inner.Constraints = layout.Constraints{Max: image.Pt(max(size.X/2, 0), size.Y)}
+	dims := lbl.Layout(inner)
+	text := rec.Stop()
+
+	box := image.Rectangle{Min: image.Pt(size.X-dims.Size.X-3*pad, size.Y-dims.Size.Y-3*pad)}
+	box.Max = box.Min.Add(dims.Size.Add(image.Pt(2*pad, 2*pad)))
+	r := gtx.Dp(unit.Dp(float32(oTheme.Rounding)))
+	paint.FillShape(gtx.Ops, fade(withAlpha(oTheme.LighterBackground, 230)), clip.UniformRRect(box, r).Op(gtx.Ops))
+	off := op.Offset(box.Min.Add(image.Pt(pad, pad))).Push(gtx.Ops)
+	text.Add(gtx.Ops)
+	off.Pop()
 }
 
 // drawFocusHint says at the bottom of the viewer who is focused and how

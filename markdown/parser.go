@@ -298,6 +298,11 @@ func extractList(l *ast.List, source []byte) *ListBlock {
 			continue
 		}
 		var item ListItem
+		if first := li.FirstChild(); first != nil {
+			if box, ok := first.FirstChild().(*east.TaskCheckBox); ok {
+				item.Task, item.Done = true, box.IsChecked
+			}
+		}
 		for sub := li.FirstChild(); sub != nil; sub = sub.NextSibling() {
 			if nested, ok := sub.(*ast.List); ok {
 				item.Nested = append(item.Nested, extractList(nested, source))
@@ -355,7 +360,16 @@ func blockSpans(n ast.Node, source []byte) []Span {
 func (l *ListBlock) plainText(indent string) string {
 	var buf strings.Builder
 	for i, item := range l.Items {
-		buf.WriteString(indent + l.marker(i) + item.Text + "\n")
+		box := ""
+		if item.Task {
+			// □ and ■ are in the bundled font, so they show from the
+			// first frame; ☐ and ☑ would wait for the system fonts.
+			box = "□ "
+			if item.Done {
+				box = "■ "
+			}
+		}
+		buf.WriteString(indent + l.marker(i) + box + item.Text + "\n")
 		for _, n := range item.Nested {
 			buf.WriteString(n.plainText(indent + "    "))
 		}

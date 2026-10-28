@@ -297,3 +297,68 @@ func TestLinkClick(t *testing.T) {
 		t.Errorf("opened %q", opened)
 	}
 }
+
+// A diagram that doesn't parse names the line of the file it goes wrong
+// on and quotes it; Enter on it, or its button, leads there.
+func TestDiagramErrorLeadsToSource(t *testing.T) {
+	src := "# T\n\n```mermaid\nsequenceDiagram\n  Alice->>Bob: hi\n  Alice->>+: oops\n```\n"
+	v := NewView(Parse([]byte(src), nil))
+	s := v.Doc.Sequences[0]
+	if s.Error == nil {
+		t.Fatal("diagram parsed")
+	}
+	if got := s.ErrorLine(); got != 6 {
+		t.Errorf("error on line %d, want 6", got)
+	}
+	if msg, line := s.errorText(); line != "Alice->>+: oops" || strings.Contains(msg, "line") {
+		t.Errorf("message %q, line %q", msg, line)
+	}
+
+	var edits []int
+	v.OnEditLine = func(line int) { edits = append(edits, line) }
+	r, frame := viewFrames(t, v)
+	frame()
+	r.Queue(key.Event{Name: key.NameTab, State: key.Press})
+	frame()
+	r.Queue(key.Event{Name: key.NameReturn, State: key.Press})
+	frame()
+	if len(edits) != 1 || edits[0] != 6 {
+		t.Fatalf("Enter: edits %v", edits)
+	}
+
+	// The button is the last thing in the box, at its bottom left.
+	for y := float32(60); y < 300; y += 4 {
+		at := f32.Pt(70+12+20, y)
+		r.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: at})
+		r.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: at})
+		frame()
+		frame()
+		if len(edits) > 1 {
+			break
+		}
+	}
+	if len(edits) != 2 || edits[1] != 6 {
+		t.Errorf("button: edits %v", edits)
+	}
+}
+
+// A long document has a scrollbar at the right edge: a click low on its
+// track scrolls down.
+func TestScrollbar(t *testing.T) {
+	var src strings.Builder
+	for i := range 200 {
+		fmt.Fprintf(&src, "Paragraph %d.\n\n", i)
+	}
+	v := NewView(Parse([]byte(src.String()), nil))
+	r, frame := viewFrames(t, v)
+	frame()
+	frame()
+	at := f32.Pt(995, 700)
+	r.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: at})
+	r.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: at})
+	frame()
+	frame()
+	if v.List.Position.First < 50 {
+		t.Errorf("click on the track: first block %d", v.List.Position.First)
+	}
+}

@@ -145,3 +145,45 @@ func TestSpansBreakLines(t *testing.T) {
 		t.Errorf("two paragraphs: %d tall, one is %d", items, item)
 	}
 }
+
+// The list text starts right of the widest marker, at any text size: a
+// list numbered past 100 takes more room than one numbered 1 to 3.
+func TestListMarkerRoom(t *testing.T) {
+	th, oTheme := testThemes(t)
+	textX := func(src string, scale float32) int {
+		l := Parse([]byte(src), nil).Blocks[0].(*ListBlock)
+		gtx := layout.Context{
+			Ops:         new(op.Ops),
+			Metric:      unit.Metric{PxPerDp: 1, PxPerSp: scale},
+			Constraints: layout.Exact(image.Pt(600, 400)),
+		}
+		_, x := l.layoutMarkers(gtx, th, oTheme)
+		return x
+	}
+	if small, big := textX("1. a\n2. b\n", 1), textX("99. a\n100. b\n", 1); big <= small {
+		t.Errorf("100 gets %d px, 1 gets %d", big, small)
+	}
+	if one, zoomed := textX("1. a\n", 1), textX("1. a\n", 2.5); zoomed <= one {
+		t.Errorf("at 250 %% text starts at %d, at 100 %% at %d", zoomed, one)
+	}
+	if one, zoomed := textX("- [ ] a\n", 1), textX("- [ ] a\n", 2.5); zoomed <= one {
+		t.Errorf("task: at 250 %% text starts at %d, at 100 %% at %d", zoomed, one)
+	}
+}
+
+// Tabs in code go to the next stop, every 4 columns.
+func TestExpandTabs(t *testing.T) {
+	for in, want := range map[string]string{
+		"\tx":        "    x",
+		"\t\tx":      "        x",
+		"ab\tc":      "ab  c",
+		"abcd\te":    "abcd    e",
+		"é\tx":       "é   x",
+		"no tabs":    "no tabs",
+		"x := 1\t//": "x := 1  //",
+	} {
+		if got := expandTabs(in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}

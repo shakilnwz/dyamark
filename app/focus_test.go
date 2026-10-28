@@ -3,6 +3,7 @@ package app
 import (
 	"image"
 	"testing"
+	"time"
 
 	"dyamark/fonts"
 	layoutPkg "dyamark/seq/layout"
@@ -19,8 +20,11 @@ import (
 	"gioui.org/widget/material"
 )
 
+// gtxNow is the time of the frames viewerFrames lays out.
+var gtxNow time.Time
+
 // viewerFrames returns a router feeding v and a function that lays out one
-// frame of it at size.
+// frame of it at size, at gtxNow.
 func viewerFrames(t *testing.T, v *Viewer, size image.Point) (*input.Router, func()) {
 	t.Helper()
 	collection, err := fonts.Collection()
@@ -38,6 +42,7 @@ func viewerFrames(t *testing.T, v *Viewer, size image.Point) (*input.Router, fun
 	}
 	return r, func() {
 		gtx.Reset()
+		gtx.Now = gtxNow
 		v.Layout(gtx, th, DefaultTheme(10))
 		r.Frame(gtx.Ops)
 	}
@@ -152,22 +157,83 @@ func TestStickyRow(t *testing.T) {
 	frame()
 	v.Set100(800, 400)
 	v.Pan.Y = 20
-	if _, _, _, ok := v.stickyRow(); ok {
+	if _, _, _, _, ok := v.stickyRow(); ok {
 		t.Fatal("pinned while the row is on screen")
 	}
 	v.Pan.Y = -600
 	frame()
-	row, headerH, top, ok := v.stickyRow()
+	row, headerH, top, scale, ok := v.stickyRow()
 	if !ok || len(row) != 2 {
 		t.Fatalf("pinned row: ok %v, %d actors", ok, len(row))
 	}
 	b := row[1]
-	at := f32.Pt(v.Pan.X+(b.Rect.X+b.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom, top+b.Rect.H/2*v.Zoom)
+	at := f32.Pt(v.Pan.X+(b.Rect.X+b.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom, top+b.Rect.H/2*scale)
 	if at.Y >= headerH {
 		t.Fatalf("B's pinned box at y %f is below the header (%f)", at.Y, headerH)
 	}
 	click(r, frame, at, at)
 	if v.Focus != "B" {
 		t.Errorf("clicking pinned B focused %q", v.Focus)
+	}
+
+	// Zoomed in, the row stays at 100 %, still over B's lifeline.
+	v.Focus = ""
+	v.Zoom = 2
+	frame()
+	row, zoomedH, top, scale, ok := v.stickyRow()
+	if !ok || scale != 1 || zoomedH != headerH {
+		t.Fatalf("zoomed: ok %v, scale %f, height %f (%f at 100 %%)", ok, scale, zoomedH, headerH)
+	}
+	b = row[1]
+	at = f32.Pt(v.Pan.X+(b.Rect.X+b.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom, top+b.Rect.H*0.9)
+	// Beside the box drawn at 100 %, inside where it would be at 200 %.
+	beside := at.Add(f32.Pt(b.Rect.W*0.75, 0))
+	click(r, frame, beside, beside)
+	if v.Focus != "" {
+		t.Errorf("zoomed: clicking beside pinned B focused %q", v.Focus)
+	}
+	click(r, frame, at, at)
+	if v.Focus != "B" {
+		t.Errorf("zoomed: clicking pinned B focused %q", v.Focus)
+	}
+}
+
+// The info line names the diagram, its place among the file's, the zoom
+// and the key list; it shows when a diagram opens, fades, and comes back
+// on a key.
+func TestViewerInfo(t *testing.T) {
+	d1, _ := parse.Parse("sequenceDiagram\ntitle Checkout flow\nA->>B: hi")
+	d2, _ := parse.Parse("sequenceDiagram\nA->>B: hi")
+	v := NewViewer([]*parse.Diagram{d1, d2}, 0)
+	v.Zoom = 1.5
+	if got := v.infoText(); got != "Checkout flow · 1 of 2 · 150 % · ? for keys" {
+		t.Errorf("info %q", got)
+	}
+	v.NextDiagram()
+	v.Zoom = 1
+	if got := v.infoText(); got != "Diagram · 2 of 2 · 100 % · ? for keys" {
+		t.Errorf("info %q", got)
+	}
+
+	r, frame := viewerFrames(t, v, image.Pt(800, 600))
+	start := time.Now()
+	at := func(d time.Duration) {
+		gtxNow = start.Add(d)
+		frame()
+	}
+	at(0)
+	if a := v.infoAlpha(start); a != 1 {
+		t.Errorf("opened: alpha %f", a)
+	}
+	if a := v.infoAlpha(start.Add(infoShow + infoFade/2)); a <= 0 || a >= 1 {
+		t.Errorf("fading: alpha %f", a)
+	}
+	if a := v.infoAlpha(start.Add(5 * time.Second)); a != 0 {
+		t.Errorf("later: alpha %f", a)
+	}
+	r.Queue(key.Event{Name: "N", State: key.Press})
+	at(5 * time.Second)
+	if a := v.infoAlpha(start.Add(5 * time.Second)); a != 1 {
+		t.Errorf("after a key: alpha %f", a)
 	}
 }

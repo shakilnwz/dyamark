@@ -98,6 +98,7 @@ Not yet: phases 7 and 8 in [PLAN.md](PLAN.md).
 | Key | Action |
 |---|---|
 | `Ctrl+O` | Open |
+| `Ctrl+F` | Find; `Enter` / `Shift+Enter` for the next / previous match |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / save as |
 | `Ctrl+E` | Source / view |
 | `Ctrl+\` | Source and view side by side |
@@ -113,4 +114,5 @@ Not yet: phases 7 and 8 in [PLAN.md](PLAN.md).
 | `R` | Render another Mermaid diagram type with `mmdc` |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Text size |
 | `Esc` | Close the viewer, or cancel a question |
+| `?` / `F1` | List the keys |
 | `Ctrl+Q` | Quit |

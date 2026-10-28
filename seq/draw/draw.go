@@ -160,7 +160,7 @@ func Draw(gtx layout.Context, th *material.Theme, seqTh seq.Theme, diag *layoutP
 			num := m.Number
 			path := circle(gtx.Ops, f32.Pt(num.Center.X, num.Center.Y), num.Radius)
 			paint.FillShape(gtx.Ops, seqTh.Signal, clip.Outline{Path: path}.Op())
-			d.text(num.Text, seqTh.ActorBkg)
+			d.text(num.Text, seq.TextOn(seqTh.Signal))
 		}
 	}
 

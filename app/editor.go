@@ -51,6 +51,9 @@ func (a *App) load(data []byte) {
 // once typing stops, and a document with a file saved a moment later.
 func (a *App) edited(now time.Time) {
 	text := a.editor.Text()
+	if a.find.open {
+		a.find.textChanged = true
+	}
 	a.dirty = text != a.saved
 	a.updateTitle()
 	if text == a.parsed {

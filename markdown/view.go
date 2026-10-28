@@ -11,6 +11,8 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+	"gioui.org/widget"
 	"gioui.org/widget/material"
 )
 
@@ -29,12 +31,36 @@ type View struct {
 	OnRenderMermaid func(block *MermaidOtherBlock)
 	// OnOpenLink is called with a clicked link's URL.
 	OnOpenLink func(url string)
+	// OnEditLine shows the source at a line of the file, 1-based.
+	OnEditLine func(line int)
+	// Mark is the block marked beside it, a find's match, or -1.
+	Mark int
+
+	scrollbar widget.Scrollbar
 
 	// show is 1 + the block to bring into view at the next layout, or 0.
 	show int
 	// heights holds the height of each block laid out last, for laidDoc.
 	heights map[int]int
 	laidDoc *ParsedDocument
+}
+
+// blockSpan returns where block i's top is in the view and its height, as
+// last laid out; ok is false if it wasn't.
+func (v *View) blockSpan(i int) (top, h int, ok bool) {
+	h, ok = v.heights[i]
+	if !ok {
+		return 0, 0, false
+	}
+	p := v.List.Position
+	top = -p.Offset
+	for k := p.First; k < i; k++ {
+		top += v.heights[k] + v.List.Gap
+	}
+	for k := p.First - 1; k >= i; k-- {
+		top -= v.heights[k] + v.List.Gap
+	}
+	return top, h, true
 }
 
 // ShowBlock scrolls block i into view at the next layout, as little as
@@ -52,18 +78,11 @@ func (v *View) reveal(i, height int) bool {
 		return false
 	}
 	p := &v.List.Position
-	h, ok := v.heights[i]
+	top, h, ok := v.blockSpan(i)
 	if !ok {
 		// Not near the view: put its top at the top.
 		p.First, p.Offset = i, 0
 		return true
-	}
-	top := -p.Offset
-	for k := p.First; k < i; k++ {
-		top += v.heights[k] + v.List.Gap
-	}
-	for k := p.First - 1; k >= i; k-- {
-		top -= v.heights[k] + v.List.Gap
 	}
 	bottom := top + h
 	switch {
@@ -81,6 +100,7 @@ func NewView(doc *ParsedDocument) *View {
 		Doc:          doc,
 		FocusedIndex: -1,
 		TextScale:    1.0,
+		Mark:         -1,
 	}
 	v.List.Axis = layout.Vertical
 	v.List.Gap = 12
@@ -138,14 +158,22 @@ func (v *View) FocusPrev() {
 	v.FocusedIndex = (v.FocusedIndex - 1 + len(v.Doc.Sequences)) % len(v.Doc.Sequences)
 }
 
-// openDiagram opens the focused diagram in the viewer, or the first one on
-// screen that parsed when none is focused.
+// openDiagram opens the focused diagram in the viewer, or its source at the
+// error when it doesn't parse; with none focused, the first one on screen
+// that parsed.
 func (v *View) openDiagram() {
-	if v.OnOpenViewer == nil {
+	if v.FocusedIndex >= 0 && v.FocusedIndex < len(v.Doc.Sequences) {
+		s := v.Doc.Sequences[v.FocusedIndex]
+		switch {
+		case s.Error != nil && v.OnEditLine != nil:
+			// A broken diagram is fixed in the source.
+			v.OnEditLine(s.ErrorLine())
+		case s.Error == nil && v.OnOpenViewer != nil:
+			v.OnOpenViewer(s)
+		}
 		return
 	}
-	if v.FocusedIndex >= 0 && v.FocusedIndex < len(v.Doc.Sequences) {
-		v.OnOpenViewer(v.Doc.Sequences[v.FocusedIndex])
+	if v.OnOpenViewer == nil {
 		return
 	}
 	for _, b := range v.visibleBlocks() {
@@ -326,7 +354,6 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 
 	// Render scrollable column
 	trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(offsetX), 0))).Push(gtx.Ops)
-	defer trans.Pop()
 
 	if v.TextScale <= 0 {
 		v.TextScale = 1.0
@@ -362,6 +389,9 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 		if seq.OnOpenViewer == nil {
 			seq.OnOpenViewer = v.OnOpenViewer
 		}
+		if seq.OnEditLine == nil {
+			seq.OnEditLine = v.OnEditLine
+		}
 	}
 
 	for _, b := range v.Doc.Blocks {
@@ -377,9 +407,60 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	}
 	clear(v.heights)
 	v.laidDoc = v.Doc
-	return v.List.Layout(colGtx, len(v.Doc.Blocks), func(gtx layout.Context, i int) layout.Dimensions {
+	n := len(v.Doc.Blocks)
+	dims := v.List.Layout(colGtx, n, func(gtx layout.Context, i int) layout.Dimensions {
 		dims := v.Doc.Blocks[i].Layout(gtx, th, oTheme)
 		v.heights[i] = dims.Size.Y
 		return dims
 	})
+	// The list clips its blocks to the column, so the mark beside one is
+	// drawn after it.
+	if top, h, ok := v.blockSpan(v.Mark); ok {
+		x := -gtx.Dp(14)
+		bar := image.Rect(x, max(top, 0), x+gtx.Dp(4), min(top+h, size.Y))
+		paint.FillShape(gtx.Ops, oTheme.Accent, clip.UniformRRect(bar, gtx.Dp(2)).Op(gtx.Ops))
+	}
+	trans.Pop()
+	v.layoutScrollbar(gtx, th, oTheme, size)
+	return dims
+}
+
+// layoutScrollbar draws the scrollbar at the right edge of the view, size
+// big, and scrolls the list by what's dragged on it.
+func (v *View) layoutScrollbar(gtx layout.Context, th *material.Theme, oTheme *Theme, size image.Point) {
+	n := len(v.Doc.Blocks)
+	if n == 0 || v.List.Position.Length <= 0 {
+		return
+	}
+	start, end := viewportOf(v.List.Position, n, size.Y)
+	sb := material.Scrollbar(th, &v.scrollbar)
+	sb.Indicator.Color = withAlpha(oTheme.Foreground, 70)
+	sb.Indicator.HoverColor = withAlpha(oTheme.Foreground, 140)
+	bar := gtx
+	bar.Constraints = layout.Exact(size)
+	layout.E.Layout(bar, func(gtx layout.Context) layout.Dimensions {
+		return sb.Layout(gtx, layout.Vertical, start, end)
+	})
+	if d := v.scrollbar.ScrollDistance(); d != 0 {
+		v.List.ScrollBy(d * float32(n))
+	}
+}
+
+// viewportOf returns where the view, height tall, is in the list, as
+// fractions of its estimated length. It's material.List's estimate.
+func viewportOf(p layout.Position, n, height int) (start, end float32) {
+	clamp := func(v float32) float32 { return max(0, min(v, 1)) }
+	length := float32(p.Length)
+	each := length / float32(n)
+	start = clamp((float32(p.First)*each + float32(p.Offset)) / length)
+	end = clamp((float32(p.First+p.Count)*each + float32(p.OffsetLast)) / length)
+	// Spread the difference from the visible share of the estimated
+	// length over both ends, by how close each is.
+	shown := end - start
+	if shown < 1 {
+		err := float32(height)/length - shown
+		s, e := start/(1-shown), (1-end)/(1-shown)
+		start, end = start-s*err, end+e*err
+	}
+	return start, end
 }

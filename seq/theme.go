@@ -316,3 +316,34 @@ func HexColor(hex string, alpha uint8) color.NRGBA {
 	}
 	return color.NRGBA{R: 200, G: 200, B: 200, A: alpha}
 }
+
+// relLuminance is c's relative luminance, as WCAG defines it.
+func relLuminance(c color.NRGBA) float64 {
+	lin := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(c.R) + 0.7152*lin(c.G) + 0.0722*lin(c.B)
+}
+
+// Contrast is the WCAG contrast ratio of a and b, from 1 to 21.
+func Contrast(a, b color.NRGBA) float64 {
+	la, lb := relLuminance(a), relLuminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+// TextOn returns black or white, whichever reads better on bg.
+func TextOn(bg color.NRGBA) color.NRGBA {
+	black := color.NRGBA{A: 255}
+	white := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	if Contrast(black, bg) >= Contrast(white, bg) {
+		return black
+	}
+	return white
+}

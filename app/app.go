@@ -109,6 +109,10 @@ type App struct {
 	conflict *string
 	// prompt is the question shown over the window, if any.
 	prompt *Prompt
+	// help is set while the key list is shown over the window.
+	help bool
+	// find is the find bar, shown above the status line.
+	find finder
 	// notice is a message shown at the bottom until noticeUntil.
 	notice      string
 	noticeUntil time.Time
@@ -277,6 +281,7 @@ func New(opts Options) (*App, error) {
 	}
 
 	mdView.OnOpenLink = a.openLink
+	mdView.OnEditLine = a.editAt
 
 	mdView.OnRenderMermaid = func(block *markdown.MermaidOtherBlock) {
 		go func() {
@@ -534,7 +539,7 @@ func (a *App) closing(e *app.ClosingEvent) {
 func (a *App) frame(gtx layout.Context) {
 	a.runPending()
 	a.tick(gtx.Now)
-	if a.prompt == nil {
+	if a.prompt == nil && !a.help {
 		a.shortcuts(gtx)
 	}
 
@@ -547,22 +552,27 @@ func (a *App) frame(gtx layout.Context) {
 	event.Op(gtx.Ops, a)
 	dropArea.Pop()
 
-	// Under a prompt the window takes no input.
+	// Under a prompt or the key list the window takes no input.
 	under := gtx
-	if a.prompt != nil {
+	if a.prompt != nil || a.help {
 		under = gtx.Disabled()
 	}
-	// The status line takes the bottom of the window.
-	statusH := 0
+	// The status line takes the bottom of the window, and the find bar
+	// the line above it.
+	statusH, findH := 0, 0
 	if a.showStatus() {
 		statusH = gtx.Dp(statusHeight)
-		under.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-statusH, 0)))
 	}
+	if a.find.open && a.mode != ModeViewer {
+		findH = gtx.Dp(findHeight)
+	}
+	under.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-statusH-findH, 0)))
 	mdTh := &markdown.Theme{
 		Background:        theme.Background,
 		Foreground:        theme.Foreground,
 		Accent:            theme.Accent,
 		LighterBackground: theme.LighterBackground,
+		Error:             errorColor(theme),
 		Rounding:          theme.Rounding,
 		Seq:               theme.Seq,
 	}
@@ -574,10 +584,17 @@ func (a *App) frame(gtx layout.Context) {
 	case ModeSplit:
 		a.layoutSplit(under, theme, mdTh)
 	default:
-		a.mdView.NoPlainKeys = false
+		a.mdView.NoPlainKeys = gtx.Focused(&a.find.ed)
 		a.mdView.Layout(under, a.mTheme, mdTh)
 	}
 
+	if findH > 0 {
+		bar := under
+		bar.Constraints = layout.Exact(image.Pt(size.X, findH))
+		off := op.Offset(image.Pt(0, size.Y-statusH-findH)).Push(gtx.Ops)
+		a.layoutFind(bar, theme)
+		off.Pop()
+	}
 	if statusH > 0 {
 		bar := gtx
 		bar.Constraints = layout.Exact(image.Pt(size.X, statusH))
@@ -585,12 +602,15 @@ func (a *App) frame(gtx layout.Context) {
 		a.layoutStatus(bar, theme)
 		off.Pop()
 	}
+	if a.help {
+		a.layoutHelp(gtx, theme)
+	}
 	if a.prompt != nil {
 		a.layoutPrompt(gtx, theme)
 	}
 	if a.notice != "" {
 		above := gtx
-		above.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-statusH, 0)))
+		above.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-statusH-findH, 0)))
 		a.layoutNotice(above, theme)
 	}
 	// Wake up for the parse, save or notice waiting on typing to stop.
@@ -626,7 +646,7 @@ func (a *App) layoutSplit(gtx layout.Context, theme *Theme, mdTh *markdown.Theme
 	}
 	area := clip.Rect(image.Rectangle{Max: right.Constraints.Max}).Push(gtx.Ops)
 	event.Op(gtx.Ops, &a.mdView)
-	a.mdView.NoPlainKeys = gtx.Focused(&a.editor)
+	a.mdView.NoPlainKeys = gtx.Focused(&a.editor) || gtx.Focused(&a.find.ed)
 	// The view follows the caret to another block, and through edits,
 	// while the editor has the keyboard.
 	line, _ := a.editor.CaretPos()
@@ -649,8 +669,10 @@ func (a *App) shortcuts(gtx layout.Context) {
 		key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "S"},
 		key.Filter{Required: key.ModCtrl, Name: "E"},
 		key.Filter{Required: key.ModCtrl, Name: "\\"},
+		key.Filter{Required: key.ModCtrl, Name: "F"},
 		transfer.TargetFilter{Target: a, Type: "text/uri-list"},
 	}
+	filters = append(filters, a.helpKeys(gtx)...)
 	if a.mode == ModeEdit {
 		// The view, which handles text size, isn't laid out.
 		filters = append(filters,
@@ -725,6 +747,10 @@ func (a *App) shortcut(e key.Event) {
 		} else {
 			a.setMode(ModeSplit)
 		}
+	case "?", key.NameF1:
+		a.help = true
+	case "F":
+		a.openFind()
 	case "=", "+":
 		a.mdView.ZoomTextIn()
 	case "-", "_":

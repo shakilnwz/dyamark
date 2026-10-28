@@ -104,3 +104,24 @@ func TestParseColor(t *testing.T) {
 		}
 	}
 }
+
+// Text on a colour is black or white, whichever has more contrast; the
+// sequence-number badge in the snxz theme gets black.
+func TestTextOn(t *testing.T) {
+	for _, tt := range []struct {
+		bg   string
+		want uint8
+	}{{"#7186fd", 0}, {"#ffd60a", 0}, {"#1f242c", 255}, {"#e64553", 0}, {"#1e66f5", 255}} {
+		bg := HexColor(tt.bg, 255)
+		got := TextOn(bg)
+		if got.R != tt.want {
+			t.Errorf("on %s: got %v", tt.bg, got)
+		}
+		if c := Contrast(got, bg); c < 4.5 {
+			t.Errorf("on %s: contrast %.2f", tt.bg, c)
+		}
+	}
+	if c := Contrast(HexColor("#000", 255), HexColor("#fff", 255)); c < 20.9 || c > 21.1 {
+		t.Errorf("black on white: %.2f", c)
+	}
+}
