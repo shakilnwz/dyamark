@@ -17,7 +17,10 @@ func TestBundledFonts(t *testing.T) {
 		t.Fatalf("Collection() returned error: %v", err)
 	}
 
-	if len(faces) != 2 {
-		t.Fatalf("expected 2 font faces, got %d", len(faces))
+	if len(faces) != 3 {
+		t.Fatalf("expected 3 font faces, got %d", len(faces))
+	}
+	if got := faces[2].Font.Typeface; got != Mono {
+		t.Errorf("monospace face is %q, want %q", got, Mono)
 	}
 }

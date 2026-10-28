@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"strings"
 
+	"dyamark/fonts"
 	"dyamark/seq"
 	"dyamark/seq/draw"
 	layoutPkg "dyamark/seq/layout"
@@ -122,7 +123,7 @@ func (c *CodeBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme
 	for i, line := range lines {
 		lbl := material.Label(th, fontSize, line)
 		lbl.Color = oTheme.Foreground
-		lbl.Font.Typeface = font.Typeface("monospace")
+		lbl.Font.Typeface = fonts.Mono
 		lbl.LineHeight = unit.Sp(float32(lineH) / pxPerSp)
 		lbl.LineHeightScale = 1
 		m := op.Record(gtx.Ops)

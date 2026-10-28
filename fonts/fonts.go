@@ -14,7 +14,15 @@ var RegularTTF []byte
 //go:embed LiberationSans-Bold.ttf
 var BoldTTF []byte
 
-// Collection returns a FontFace collection containing the bundled Liberation Sans fonts.
+//go:embed LiberationMono-Regular.ttf
+var MonoTTF []byte
+
+// Mono is the bundled monospace typeface, for source text and code blocks.
+// It's in the first frames, before the system fonts arrive.
+const Mono = font.Typeface("Liberation Mono")
+
+// Collection returns the bundled fonts: Liberation Sans regular and bold,
+// and Liberation Mono.
 func Collection() ([]font.FontFace, error) {
 	regFace, err := opentype.Parse(RegularTTF)
 	if err != nil {
@@ -26,6 +34,11 @@ func Collection() ([]font.FontFace, error) {
 		return nil, fmt.Errorf("parsing bold font: %w", err)
 	}
 
+	monoFace, err := opentype.Parse(MonoTTF)
+	if err != nil {
+		return nil, fmt.Errorf("parsing monospace font: %w", err)
+	}
+
 	faces := []font.FontFace{
 		{
 			Font: regFace.Font(),
@@ -34,6 +47,10 @@ func Collection() ([]font.FontFace, error) {
 		{
 			Font: boldFace.Font(),
 			Face: boldFace,
+		},
+		{
+			Font: monoFace.Font(),
+			Face: monoFace,
 		},
 	}
 	return faces, nil
