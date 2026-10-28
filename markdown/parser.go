@@ -234,10 +234,12 @@ func extractNodeText(n ast.Node, source []byte) string {
 		case *ast.AutoLink:
 			buf.Write(c.Label(source))
 		case *east.TaskCheckBox:
+			// □ and ■ are in the bundled font, so the boxes show from the
+			// first frame; ☐ and ☑ would wait for the system fonts.
 			if c.IsChecked {
-				buf.WriteString("☑ ")
+				buf.WriteString("■ ")
 			} else {
-				buf.WriteString("☐ ")
+				buf.WriteString("□ ")
 			}
 		case *ast.RawHTML:
 			// Inline HTML isn't drawn.

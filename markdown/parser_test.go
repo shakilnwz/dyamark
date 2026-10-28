@@ -121,8 +121,8 @@ func TestListStructure(t *testing.T) {
 	ul := doc.Blocks[0].(*ListBlock)
 	want := &ListBlock{Items: []ListItem{
 		{Text: "A\n\nmore A", Nested: []*ListBlock{{Items: []ListItem{{Text: "B1"}, {Text: "B2"}}}}},
-		{Text: "☐ todo"},
-		{Text: "☑ done & dusted"},
+		{Text: "□ todo"},
+		{Text: "■ done & dusted"},
 	}}
 	if !reflect.DeepEqual(ul, want) {
 		t.Errorf("unordered list:\n got %+v\nwant %+v", ul, want)
