@@ -140,6 +140,12 @@ Alice->>Bob: Hi`
 	if lastGoodErr != diag1 {
 		t.Errorf("expected lastGood diagram preserved across errors")
 	}
+
+	// Until another file is opened.
+	cache.ClearLastGood()
+	if _, _, _, lastGood := cache.GetOrLayout(invalidSource, 0); lastGood != nil {
+		t.Error("expected no lastGood diagram after ClearLastGood")
+	}
 }
 
 func TestLineIndex(t *testing.T) {

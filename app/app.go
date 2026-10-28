@@ -270,6 +270,7 @@ func (a *App) OpenFile(filePath string) error {
 	a.opts.FilePath = filePath
 	a.window.Option(app.Title(fmt.Sprintf("%s — dyamark", filepath.Base(filePath))))
 
+	a.cache.ClearLastGood()
 	doc := markdown.Parse(data, a.cache)
 	a.doc = doc
 	a.mdView.SetDocument(doc)
@@ -330,7 +331,7 @@ func (a *App) reload(newData []byte) {
 		}
 	}
 	if len(asts) > 0 {
-		a.viewer.SetDiagrams(asts, a.viewer.CurIndex)
+		a.viewer.ReloadDiagrams(asts, a.viewer.CurIndex)
 	}
 }
 
@@ -422,34 +423,6 @@ func (a *App) Run() error {
 									break
 								}
 							}
-						}
-					}
-				}
-			}
-
-			if a.mode == ModeInline && a.mdView != nil {
-				for {
-					ev, ok := gtx.Event(
-						key.Filter{Required: key.ModCtrl, Name: "="},
-						key.Filter{Required: key.ModCtrl, Name: "+"},
-						key.Filter{Required: key.ModCtrl, Name: "-"},
-						key.Filter{Required: key.ModCtrl, Name: "_"},
-						key.Filter{Required: key.ModCtrl, Name: "0"},
-					)
-					if !ok {
-						break
-					}
-					if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
-						switch ke.Name {
-						case "=", "+":
-							a.mdView.ZoomTextIn()
-							a.window.Invalidate()
-						case "-", "_":
-							a.mdView.ZoomTextOut()
-							a.window.Invalidate()
-						case "0":
-							a.mdView.ResetTextZoom()
-							a.window.Invalidate()
 						}
 					}
 				}

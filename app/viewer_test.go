@@ -9,6 +9,7 @@ import (
 
 	"gioui.org/f32"
 	"gioui.org/io/input"
+	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -240,4 +241,49 @@ func TestViewerScrollZoomAndDragPan(t *testing.T) {
 		PointerID: 1,
 	})
 	frame()
+}
+
+// `+` and `_` are typed with Shift, and Gio reports it; they still zoom.
+func TestViewerShiftedZoomKeys(t *testing.T) {
+	d1, err := parse.Parse(sampleMMD1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewViewer([]*parse.Diagram{d1}, 0)
+
+	collection, err := fonts.Collection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mTheme := material.NewTheme()
+	mTheme.Shaper = text.NewShaper(text.WithCollection(collection), text.NoSystemFonts())
+	oTheme := DefaultTheme(10)
+
+	var r input.Router
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Source:      r.Source(),
+	}
+	frame := func() {
+		gtx.Reset()
+		v.Layout(gtx, mTheme, oTheme)
+		r.Frame(gtx.Ops)
+	}
+	frame()
+
+	zoom := v.Zoom
+	r.Queue(key.Event{Name: "+", Modifiers: key.ModShift, State: key.Press})
+	frame()
+	if v.Zoom <= zoom {
+		t.Errorf("Shift++ didn't zoom in: %f <= %f", v.Zoom, zoom)
+	}
+
+	zoom = v.Zoom
+	r.Queue(key.Event{Name: "_", Modifiers: key.ModShift, State: key.Press})
+	frame()
+	if v.Zoom >= zoom {
+		t.Errorf("Shift+_ didn't zoom out: %f >= %f", v.Zoom, zoom)
+	}
 }

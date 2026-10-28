@@ -87,6 +87,59 @@ func (v *View) FocusPrev() {
 	v.FocusedIndex = (v.FocusedIndex - 1 + len(v.Doc.Sequences)) % len(v.Doc.Sequences)
 }
 
+// openDiagram opens the focused diagram in the viewer, or the first one on
+// screen that parsed when none is focused.
+func (v *View) openDiagram() {
+	if v.OnOpenViewer == nil {
+		return
+	}
+	if v.FocusedIndex >= 0 && v.FocusedIndex < len(v.Doc.Sequences) {
+		v.OnOpenViewer(v.Doc.Sequences[v.FocusedIndex])
+		return
+	}
+	for _, b := range v.visibleBlocks() {
+		if s, ok := b.(*SequenceBlock); ok && s.AST != nil {
+			v.OnOpenViewer(s)
+			return
+		}
+	}
+}
+
+// renderMermaid renders the Mermaid block under the pointer with mmdc, or
+// else the first one on screen that isn't rendered yet.
+func (v *View) renderMermaid() {
+	if v.OnRenderMermaid == nil {
+		return
+	}
+	var target *MermaidOtherBlock
+	for _, b := range v.visibleBlocks() {
+		m, ok := b.(*MermaidOtherBlock)
+		if !ok {
+			continue
+		}
+		if m.hovered {
+			target = m
+			break
+		}
+		if target == nil && m.Rendered == nil {
+			target = m
+		}
+	}
+	if target != nil {
+		v.OnRenderMermaid(target)
+	}
+}
+
+// visibleBlocks returns the blocks on screen in the last frame.
+func (v *View) visibleBlocks() []Block {
+	first := v.List.Position.First
+	last := min(first+v.List.Position.Count, len(v.Doc.Blocks))
+	if first < 0 || first >= last {
+		return nil
+	}
+	return v.Doc.Blocks[first:last]
+}
+
 // Layout renders the document into a readable column with scrolling.
 func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
 	size := gtx.Constraints.Max
@@ -106,10 +159,12 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 			key.Filter{Name: key.NameTab, Required: key.ModShift},
 			key.Filter{Name: key.NameReturn},
 			key.Filter{Name: key.NameEnter},
+			key.Filter{Name: "R"},
 			key.Filter{Required: key.ModCtrl, Name: "="},
-			key.Filter{Required: key.ModCtrl, Name: "+"},
+			// `+` and `_` are usually typed with Shift, which Gio reports.
+			key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "+"},
 			key.Filter{Required: key.ModCtrl, Name: "-"},
-			key.Filter{Required: key.ModCtrl, Name: "_"},
+			key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "_"},
 			key.Filter{Required: key.ModCtrl, Name: "0"},
 		)
 		if !ok {
@@ -144,10 +199,10 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 					} else {
 						v.FocusNext()
 					}
-				} else if (e.Name == key.NameReturn || e.Name == key.NameEnter) && v.FocusedIndex >= 0 && v.FocusedIndex < len(v.Doc.Sequences) {
-					if v.OnOpenViewer != nil {
-						v.OnOpenViewer(v.Doc.Sequences[v.FocusedIndex])
-					}
+				} else if e.Name == key.NameReturn || e.Name == key.NameEnter {
+					v.openDiagram()
+				} else if e.Name == "R" {
+					v.renderMermaid()
 				}
 			}
 		}

@@ -1,13 +1,22 @@
 package app
 
 import (
+	"image"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"dyamark/fonts"
 	"dyamark/markdown"
+
+	"gioui.org/f32"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/text"
+	"gioui.org/unit"
+	"gioui.org/widget/material"
 )
 
 const markdownWithFences = `# Title
@@ -169,6 +178,98 @@ func TestReloadRunsOnUIGoroutine(t *testing.T) {
 	a.runPending()
 	if a.doc == before || len(a.doc.Blocks) != 2 {
 		t.Fatalf("reload not applied: %d blocks", len(a.doc.Blocks))
+	}
+}
+
+// Saving the file keeps the viewer's zoom, pan and sequence-number toggle;
+// opening another file fits its diagram afresh.
+func TestReloadKeepsViewerPlace(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.mmd")
+	if err := os.WriteFile(p, []byte(sampleMMD1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{FilePath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { a.fileWatcher.Close() }()
+
+	collection, err := fonts.Collection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mTheme := material.NewTheme()
+	mTheme.Shaper = text.NewShaper(text.WithCollection(collection), text.NoSystemFonts())
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+		Constraints: layout.Exact(image.Pt(800, 600)),
+	}
+	frame := func() {
+		gtx.Reset()
+		a.viewer.Layout(gtx, mTheme, DefaultTheme(10))
+	}
+	frame()
+
+	a.viewer.ZoomBy(2, f32.Pt(100, 100))
+	a.viewer.ToggleSequenceNumbers()
+	zoom, pan := a.viewer.Zoom, a.viewer.Pan
+	if !a.viewer.Config.ShowSequenceNumbers {
+		t.Fatal("N didn't turn sequence numbers on")
+	}
+
+	a.reload([]byte(sampleMMD1 + "\nBob->>Alice: again\n"))
+	frame()
+	if a.viewer.Zoom != zoom || a.viewer.Pan != pan {
+		t.Errorf("reload moved the view: zoom %f pan %v, want %f %v", a.viewer.Zoom, a.viewer.Pan, zoom, pan)
+	}
+	if !a.viewer.Config.ShowSequenceNumbers {
+		t.Error("reload undid N")
+	}
+	if len(a.viewer.Diagram.Messages) != 3 {
+		t.Errorf("reload not drawn: %d messages, want 3", len(a.viewer.Diagram.Messages))
+	}
+
+	q := filepath.Join(dir, "b.mmd")
+	if err := os.WriteFile(q, []byte(sampleMMD2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.OpenFile(q); err != nil {
+		t.Fatal(err)
+	}
+	frame()
+	if a.viewer.Zoom == zoom {
+		t.Error("another file kept the old zoom instead of fitting")
+	}
+}
+
+// A broken diagram in a newly opened file has no last good drawing to show
+// under its error; the previous file's diagram isn't one.
+func TestOpenFileForgetsLastGood(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.md")
+	second := filepath.Join(dir, "second.md")
+	if err := os.WriteFile(first, []byte("```mermaid\n"+sampleMMD1+"\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("```mermaid\nsequenceDiagram\nloop Unclosed\nA->>B: hi\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{FilePath: first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { a.fileWatcher.Close() }()
+	if err := a.OpenFile(second); err != nil {
+		t.Fatal(err)
+	}
+	s := a.doc.Sequences[0]
+	if s.Error == nil {
+		t.Fatal("expected the diagram to fail")
+	}
+	if s.LastGood != nil {
+		t.Error("the previous file's diagram is shown as this one's last good drawing")
 	}
 }
 
