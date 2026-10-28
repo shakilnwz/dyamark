@@ -55,6 +55,11 @@ type Viewer struct {
 	// notes and activations stay bright while the rest is dimmed.
 	Focus string
 
+	// chips holds the pinned strip's names, as last drawn, and metric
+	// the screen's, for the strip's height.
+	chips  []chip
+	metric unit.Metric
+
 	// infoSince is when the info line was last shown; wakeInfo shows it
 	// again at the next frame.
 	infoSince time.Time
@@ -264,6 +269,7 @@ func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) l
 	if size.X <= 0 || size.Y <= 0 {
 		return layout.Dimensions{}
 	}
+	v.metric = gtx.Metric
 
 	if !v.fitted || size != v.lastSize {
 		v.Fit(size.X, size.Y)
@@ -476,13 +482,13 @@ func (v *Viewer) dimExcept(gtx layout.Context, th *material.Theme, seqTh seq.The
 	draw.Draw(gtx, th, seqTh, diag.Involving(v.Focus))
 }
 
-// stickyRow returns the participant row as it's pinned to the top of the
-// viewer once the diagram is scrolled up past it: the actors in it, its
-// header's height and where it puts the actors' top, in screen px. ok is
-// false while the row is still on screen by itself.
-func (v *Viewer) stickyRow() (actors []layoutPkg.Actor, headerH, top, scale float32, ok bool) {
+// stickyRow returns the participant row once the diagram is scrolled up
+// past it, when it's pinned to the top of the viewer as a strip of names:
+// the actors in it and the strip's height, in screen px. ok is false while
+// the row is still on screen by itself.
+func (v *Viewer) stickyRow() (actors []layoutPkg.Actor, headerH float32, ok bool) {
 	if v.Diagram == nil {
-		return nil, 0, 0, 0, false
+		return nil, 0, false
 	}
 	// The row is the heads at the top; a participant created later has
 	// its head further down, and the feet are at the bottom.
@@ -492,34 +498,44 @@ func (v *Viewer) stickyRow() (actors []layoutPkg.Actor, headerH, top, scale floa
 			rowY = min(rowY, a.Rect.Y)
 		}
 	}
-	var maxH float32
 	for _, a := range v.Diagram.Actors {
 		if !a.Footer && a.Rect.Y <= rowY+1 {
 			actors = append(actors, a)
-			maxH = max(maxH, a.Rect.H)
 		}
 	}
 	if len(actors) == 0 {
-		return nil, 0, 0, 0, false
+		return nil, 0, false
 	}
 	if v.Pan.Y+(rowY-v.Diagram.ViewBox.Y)*v.Zoom >= 0 {
-		return nil, 0, 0, 0, false
+		return nil, 0, false
 	}
-	// Zoomed in, the row stays at 100 % so it doesn't take the window.
-	scale = min(v.Zoom, 1)
-	return actors, max((maxH+20)*scale, 44), stickyPad, scale, true
+	// The strip is as tall whatever the zoom, so zoomed in it doesn't
+	// take the window.
+	return actors, float32(v.metric.Dp(stickyHeight)), true
 }
 
-// pinnedRect returns where actor a of the pinned row, drawn at scale with
-// its top at top, is on screen: centred on its lifeline.
-func (v *Viewer) pinnedRect(a layoutPkg.Actor, top, scale float32) (min, max f32.Point) {
-	cx := v.Pan.X + (a.Rect.X+a.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom
-	min = f32.Pt(cx-a.Rect.W/2*scale, top)
-	return min, min.Add(f32.Pt(a.Rect.W*scale, a.Rect.H*scale))
+const (
+	// stickyHeight is the pinned strip's height, and chipHeight that of
+	// a name in it, in dp.
+	stickyHeight = 30
+	chipHeight   = 22
+	// chipMaxWidth is the widest a name gets, in dp.
+	chipMaxWidth = 240
+)
+
+// chip is a participant's name in the pinned strip, as last drawn.
+type chip struct {
+	id string
+	// label is the name in full, and cut set when it's shortened to fit.
+	label string
+	cut   bool
+	rect  image.Rectangle
 }
 
-// stickyPad is the gap above the pinned participant row.
-const stickyPad = 10
+// lifelineX returns where actor a's lifeline is on screen.
+func (v *Viewer) lifelineX(a layoutPkg.Actor) float32 {
+	return v.Pan.X + (a.Rect.X+a.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom
+}
 
 // toDiagram turns a point on screen into diagram coordinates.
 func (v *Viewer) toDiagram(p f32.Point) f32.Point {
@@ -537,12 +553,11 @@ func (v *Viewer) actorAt(p f32.Point, size image.Point) string {
 		r := a.Rect
 		return q.X >= r.X && q.X <= r.X+r.W && q.Y >= r.Y && q.Y <= r.Y+r.H
 	}
-	if row, headerH, top, scale, ok := v.stickyRow(); ok && p.Y < headerH {
-		// The pinned row covers the diagram under it.
-		for _, a := range row {
-			lo, hi := v.pinnedRect(a, top, scale)
-			if p.X >= lo.X && p.X <= hi.X && p.Y >= lo.Y && p.Y <= hi.Y {
-				return a.ID
+	if _, headerH, ok := v.stickyRow(); ok && p.Y < headerH {
+		// The pinned strip covers the diagram under it.
+		for _, c := range v.chips {
+			if image.Pt(int(p.X), int(p.Y)).In(c.rect) {
+				return c.id
 			}
 		}
 		return ""
@@ -578,44 +593,96 @@ func (v *Viewer) actorLabel(id string) string {
 	return ""
 }
 
-// drawStickyActors pins the participant row to the top of the viewer once
-// a tall diagram is scrolled up past it.
+// drawStickyActors pins the participants' names to the top of the viewer,
+// each over its lifeline, once a tall diagram is scrolled up past them.
+// A name too long for the room between lifelines is cut short, and shown
+// in full while the pointer is on it.
 func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh seq.Theme, oTheme *Theme, size image.Point) {
-	row, headerH, top, scale, ok := v.stickyRow()
+	v.chips = v.chips[:0]
+	row, headerH, ok := v.stickyRow()
 	if !ok {
 		return
 	}
+	h := int(headerH)
+	paint.FillShape(gtx.Ops, oTheme.Background, clip.Rect(image.Rect(0, 0, size.X, h)).Op())
+	paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 40), clip.Rect(image.Rect(0, h-1, size.X, h)).Op())
 
-	// Draw sticky header background strip
-	hdrRect := clip.Rect(image.Rectangle{Max: image.Pt(size.X, int(headerH))})
-	hdrClip := hdrRect.Push(gtx.Ops)
-	paint.FillShape(gtx.Ops, oTheme.Background, hdrRect.Op())
-
-	// Bottom border for sticky header
-	sepY := headerH - 1
-	var sep clip.Path
-	sep.Begin(gtx.Ops)
-	sep.MoveTo(f32.Pt(0, sepY))
-	sep.LineTo(f32.Pt(float32(size.X), sepY))
-	paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 40), clip.Stroke{Path: sep.End(), Width: 1}.Op())
-
-	diagGtx := gtx
-	diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
-	// Each participant is drawn on its own over its lifeline: the row's
-	// scale can be less than the diagram's.
-	for _, a := range row {
-		lo, _ := v.pinnedRect(a, top, scale)
-		trans := op.Affine(f32.Affine2D{}.Scale(f32.Pt(0, 0), f32.Pt(scale, scale)).Offset(lo)).Push(gtx.Ops)
-		vb := v.Diagram.ViewBox
-		vb.X, vb.Y = a.Rect.X, a.Rect.Y
-		subDiag := &layoutPkg.Diagram{Actors: []layoutPkg.Actor{a}, ViewBox: vb}
-		draw.Draw(diagGtx, th, seqTh, subDiag)
-		if v.Focus != "" {
-			v.dimExcept(diagGtx, th, seqTh, subDiag, oTheme.Background)
-		}
-		trans.Pop()
+	// label records a name in one line at most maxW wide.
+	label := func(s string, c color.NRGBA, maxW int) (op.CallOp, image.Point) {
+		gtx := gtx
+		gtx.Constraints = layout.Constraints{Max: image.Pt(max(maxW, 0), h)}
+		rec := op.Record(gtx.Ops)
+		l := material.Caption(th, s)
+		l.Color = c
+		l.MaxLines = 1
+		dims := l.Layout(gtx)
+		return rec.Stop(), dims.Size
 	}
-	hdrClip.Pop()
+	padX := gtx.Dp(8)
+	gap := gtx.Dp(6)
+	ch := gtx.Dp(chipHeight)
+	r := gtx.Dp(unit.Dp(min(seqTh.Rounding, 6)))
+	var tip *chip
+	for i, a := range row {
+		cx := v.lifelineX(a)
+		// A name has the room up to halfway to its neighbours' lifelines.
+		room := float32(gtx.Dp(chipMaxWidth))
+		if i > 0 {
+			room = min(room, cx-v.lifelineX(row[i-1]))
+		}
+		if i+1 < len(row) {
+			room = min(room, v.lifelineX(row[i+1])-cx)
+		}
+		maxW := max(int(room)-gap, 2*padX+gtx.Dp(12))
+		c := chip{id: a.ID, label: v.actorLabel(a.ID)}
+
+		text, sz := label(c.label, seqTh.ActorText, gtx.Dp(chipMaxWidth))
+		if sz.X > maxW-2*padX {
+			c.cut = true
+			text, sz = label(c.label, seqTh.ActorText, maxW-2*padX)
+		}
+		w := sz.X + 2*padX
+		c.rect = image.Rect(int(cx)-w/2, (h-ch)/2, int(cx)-w/2+w, (h-ch)/2+ch)
+		if c.rect.Max.X < 0 || c.rect.Min.X > size.X {
+			continue
+		}
+
+		// Behind a focused participant the others are faint.
+		alpha := uint8(255)
+		if v.Focus != "" && v.Focus != a.ID {
+			alpha = 90
+		}
+		fade := func(col color.NRGBA) color.NRGBA {
+			col.A = uint8(uint16(col.A) * uint16(alpha) / 255)
+			return col
+		}
+		rr := clip.UniformRRect(c.rect, r)
+		paint.FillShape(gtx.Ops, fade(seqTh.ActorBkg), rr.Op(gtx.Ops))
+		paint.FillShape(gtx.Ops, fade(seqTh.ActorBorder), clip.Stroke{Path: rr.Path(gtx.Ops), Width: 1}.Op())
+		off := op.Offset(image.Pt(c.rect.Min.X+padX, c.rect.Min.Y+(ch-sz.Y)/2)).Push(gtx.Ops)
+		opacity := paint.PushOpacity(gtx.Ops, float32(alpha)/255)
+		text.Add(gtx.Ops)
+		opacity.Pop()
+		off.Pop()
+
+		v.chips = append(v.chips, c)
+		if c.cut && image.Pt(int(v.pointerPos.X), int(v.pointerPos.Y)).In(c.rect) {
+			tip = &v.chips[len(v.chips)-1]
+		}
+	}
+	if tip == nil {
+		return
+	}
+	// The full name, just under the strip.
+	text, sz := label(tip.label, oTheme.Foreground, size.X-4*padX)
+	box := image.Rect(0, h+gap, sz.X+2*padX, h+gap+sz.Y+gap)
+	box = box.Add(image.Pt(min(max(tip.rect.Min.X, padX), max(size.X-box.Dx()-padX, 0)), 0))
+	tr := clip.UniformRRect(box, gtx.Dp(unit.Dp(min(float32(oTheme.Rounding), 6))))
+	paint.FillShape(gtx.Ops, oTheme.LighterBackground, tr.Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 40), clip.Stroke{Path: tr.Path(gtx.Ops), Width: 1}.Op())
+	off := op.Offset(image.Pt(box.Min.X+padX, box.Min.Y+gap/2)).Push(gtx.Ops)
+	text.Add(gtx.Ops)
+	off.Pop()
 }
 
 // The info line shows for infoShow, then fades out over infoFade.

@@ -143,9 +143,9 @@ func TestViewerFocusThroughReload(t *testing.T) {
 	}
 }
 
-// Scrolled down a tall diagram, the participant row is pinned at the top,
-// and clicking a pinned participant focuses it. A participant created
-// part way down isn't in the row.
+// Scrolled down a tall diagram, the participants' names are pinned at the
+// top in a strip as tall at any zoom, and clicking a pinned name focuses
+// its participant. A participant created part way down isn't in the row.
 func TestStickyRow(t *testing.T) {
 	src := "sequenceDiagram\nparticipant A\nparticipant B\n"
 	for range 30 {
@@ -153,48 +153,83 @@ func TestStickyRow(t *testing.T) {
 	}
 	src += "create participant C\nB->>C: new\n"
 	v := viewerOf(t, src)
-	r, frame := viewerFrames(t, v, image.Pt(800, 400))
+	r, frame := viewerFrames(t, v, image.Pt(1200, 400))
 	frame()
-	v.Set100(800, 400)
+	v.Set100(1200, 400)
 	v.Pan.Y = 20
-	if _, _, _, _, ok := v.stickyRow(); ok {
+	if _, _, ok := v.stickyRow(); ok {
 		t.Fatal("pinned while the row is on screen")
 	}
-	v.Pan.Y = -600
-	frame()
-	row, headerH, top, scale, ok := v.stickyRow()
-	if !ok || len(row) != 2 {
-		t.Fatalf("pinned row: ok %v, %d actors", ok, len(row))
+
+	var heights []float32
+	for _, zoom := range []float32{0.5, 1, 4} {
+		v.Zoom = zoom
+		// A's lifeline at x 50, B's on screen to its right.
+		a := v.Diagram.Actors[0]
+		v.Pan = f32.Pt(50-(a.Rect.X+a.Rect.W/2-v.Diagram.ViewBox.X)*zoom, -600*zoom)
+		frame()
+		row, h, ok := v.stickyRow()
+		if !ok || len(row) != 2 || len(v.chips) != 2 {
+			t.Fatalf("zoom %v: ok %v, %d actors, %d names", zoom, ok, len(row), len(v.chips))
+		}
+		heights = append(heights, h)
+		for i, c := range v.chips {
+			mid := (c.rect.Min.X + c.rect.Max.X) / 2
+			if x := int(v.lifelineX(row[i])); mid < x-1 || mid > x+1 || c.rect.Max.Y > int(h) {
+				t.Errorf("zoom %v: %s's name at %v, its lifeline at %d, strip %v high", zoom, c.id, c.rect, x, h)
+			}
+		}
 	}
-	b := row[1]
-	at := f32.Pt(v.Pan.X+(b.Rect.X+b.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom, top+b.Rect.H/2*scale)
-	if at.Y >= headerH {
-		t.Fatalf("B's pinned box at y %f is below the header (%f)", at.Y, headerH)
+	if heights[0] != stickyHeight || heights[1] != heights[0] || heights[2] != heights[0] {
+		t.Errorf("strip heights %v at 50, 100 and 400 %%, want %d", heights, stickyHeight)
 	}
+
+	b := v.chips[1].rect
+	at := f32.Pt(float32(b.Min.X+b.Max.X)/2, float32(b.Min.Y+b.Max.Y)/2)
 	click(r, frame, at, at)
 	if v.Focus != "B" {
 		t.Errorf("clicking pinned B focused %q", v.Focus)
 	}
-
-	// Zoomed in, the row stays at 100 %, still over B's lifeline.
-	v.Focus = ""
-	v.Zoom = 2
-	frame()
-	row, zoomedH, top, scale, ok := v.stickyRow()
-	if !ok || scale != 1 || zoomedH != headerH {
-		t.Fatalf("zoomed: ok %v, scale %f, height %f (%f at 100 %%)", ok, scale, zoomedH, headerH)
-	}
-	b = row[1]
-	at = f32.Pt(v.Pan.X+(b.Rect.X+b.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom, top+b.Rect.H*0.9)
-	// Beside the box drawn at 100 %, inside where it would be at 200 %.
-	beside := at.Add(f32.Pt(b.Rect.W*0.75, 0))
+	// Beside a name, the strip still covers the diagram.
+	beside := f32.Pt(float32(b.Max.X+4), at.Y)
 	click(r, frame, beside, beside)
 	if v.Focus != "" {
-		t.Errorf("zoomed: clicking beside pinned B focused %q", v.Focus)
+		t.Errorf("clicking beside pinned B focused %q", v.Focus)
 	}
-	click(r, frame, at, at)
-	if v.Focus != "B" {
-		t.Errorf("zoomed: clicking pinned B focused %q", v.Focus)
+}
+
+// Zoomed out, a long name is cut short to the room between lifelines, so
+// the names don't overlap, and the pointer on it shows it in full.
+func TestStickyRowLongNames(t *testing.T) {
+	src := "sequenceDiagram\nparticipant A as Authentication Service Gateway\nparticipant B as Billing and Invoicing Backend\nparticipant C\n"
+	for range 40 {
+		src += "A->>B: ping\nB->>C: pong\n"
+	}
+	v := viewerOf(t, src)
+	r, frame := viewerFrames(t, v, image.Pt(800, 400))
+	frame()
+	v.Zoom = 0.3
+	v.Pan = f32.Pt(20, -300)
+	frame()
+	if len(v.chips) != 3 {
+		t.Fatalf("%d names pinned", len(v.chips))
+	}
+	for i := 1; i < len(v.chips); i++ {
+		if v.chips[i-1].rect.Max.X > v.chips[i].rect.Min.X {
+			t.Errorf("%s's name %v runs into %s's %v", v.chips[i-1].id, v.chips[i-1].rect, v.chips[i].id, v.chips[i].rect)
+		}
+	}
+	a := v.chips[0]
+	if !a.cut || a.label != "Authentication Service Gateway" || v.chips[2].cut {
+		t.Errorf("cut: A %v (%q), C %v", a.cut, a.label, v.chips[2].cut)
+	}
+	// Drawn with the pointer on A's name, the full name shows under the
+	// strip; that it's drawn without a panic is what's checked here.
+	mid := f32.Pt(float32(a.rect.Min.X+a.rect.Max.X)/2, float32(a.rect.Min.Y+a.rect.Max.Y)/2)
+	r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: mid})
+	frame()
+	if v.pointerPos != mid {
+		t.Errorf("pointer at %v, want %v", v.pointerPos, mid)
 	}
 }
 

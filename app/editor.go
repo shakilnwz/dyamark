@@ -43,6 +43,7 @@ func (a *App) load(data []byte) {
 	a.saved = string(data)
 	a.dirty = false
 	a.saveErr = ""
+	a.fileEvent = "Opened"
 	a.parseAt, a.saveAt = time.Time{}, time.Time{}
 	a.dropConflict()
 }
@@ -113,8 +114,7 @@ func (a *App) save() {
 func (a *App) saveTo(path string) bool {
 	text := a.editor.Text()
 	if err := SaveFile(path, []byte(text)); err != nil {
-		a.notify(fmt.Sprintf("Couldn't save %s: %v", filepath.Base(path), err))
-		// The path is in the status line already; keep only the reason.
+		// The toolbar names the file; keep only the reason.
 		var pe *fs.PathError
 		if errors.As(err, &pe) {
 			err = pe.Err
@@ -125,6 +125,7 @@ func (a *App) saveTo(path string) bool {
 	a.saved = text
 	a.dirty = false
 	a.saveErr = ""
+	a.fileEvent = "Saved"
 	a.saveAt = time.Time{}
 	// Saving over the file settles which version wins.
 	a.dropConflict()
@@ -217,6 +218,7 @@ func (a *App) diskChanged(data []byte) {
 		// No edits here to lose.
 		a.editor.SetText(disk)
 		a.saved = disk
+		a.fileEvent = "Reloaded"
 		a.reload(data)
 		a.dropConflict()
 	case disk == text:
@@ -247,6 +249,7 @@ func (a *App) conflictPrompt() *Prompt {
 				disk := []byte(*a.conflict)
 				a.closePrompt()
 				a.load(disk)
+				a.fileEvent = "Reloaded"
 				a.reload(disk)
 				a.updateTitle()
 			}},
@@ -371,7 +374,7 @@ func (a *App) updateTitle() {
 	}
 }
 
-// notify shows msg at the bottom of the window for a few seconds.
+// notify shows msg in the toolbar, or over the viewer, for a few seconds.
 func (a *App) notify(msg string) {
 	a.notice = msg
 	a.noticeUntil = time.Now().Add(5 * time.Second)

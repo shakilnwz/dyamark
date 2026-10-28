@@ -24,6 +24,9 @@ type ParsedDocument struct {
 	Lines []int
 	// Links holds the links in the text, each once.
 	Links []*Link
+	// Words is how many words a reader sees: the text and code, not the
+	// markup or the diagrams.
+	Words int
 }
 
 // BlockAt returns the index of the block holding line, 1-based: the last
@@ -175,6 +178,7 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 		Blocks:    blocks,
 		Sequences: sequences,
 		Lines:     lines,
+		Words:     countWords(doc, source),
 	}
 	d.Links = d.links()
 	return d

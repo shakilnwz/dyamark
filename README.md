@@ -73,8 +73,12 @@ reload when the file changes.
 - `Ctrl+E` shows the source, `Ctrl+\` puts it beside the rendered view,
   which follows the typing 80 ms after it stops and scrolls to the block
   the caret is in. Only the diagrams that changed are laid out again.
-- A status line shows the file, whether it's saved (a failed save stays
-  there until one works), the mode and the caret's line and column.
+- A faint toolbar along the bottom has buttons for save, open, source,
+  source and view, find and the key list, each with a tooltip naming its
+  key. After them it says what last happened to the file ("Saved plan.md",
+  "Unsaved changes to plan.md"; a failed save stays there in red until one
+  works, and errors show there for a few seconds). On the right are the
+  caret's line and column while editing, and the word count.
 - Saves are atomic, and a document with a file saves itself a second after
   typing stops. Untitled drafts are only saved when asked.
 - A change on disk is taken in quietly when there are no edits here, and
@@ -85,8 +89,11 @@ reload when the file changes.
 
 **Phase 6 (sequence extras):** done. In the viewer, clicking a
 participant dims every message, note and activation it isn't part of;
-clicking it again or `Esc` shows everything. The pinned participant row
-works with it.
+clicking it again or `Esc` shows everything. Scrolled down a tall
+diagram, the participants' names stay pinned at the top in a thin strip,
+each over its lifeline, as small at any zoom; a name too long for the room
+is cut short and shows in full under the pointer. Clicking a pinned name
+focuses that participant too.
 
 Memory is over the plan's budget: about 105–112 MB RSS, mostly Mesa's
 libraries; Go's own heap is about 10 MB.

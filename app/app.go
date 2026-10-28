@@ -111,9 +111,17 @@ type App struct {
 	prompt *Prompt
 	// help is set while the key list is shown over the window.
 	help bool
-	// find is the find bar, shown above the status line.
+	// find is the find bar, shown above the toolbar.
 	find finder
-	// notice is a message shown at the bottom until noticeUntil.
+	// toolList holds the toolbar's buttons, and tip the one whose tooltip
+	// is shown.
+	toolList []*tool
+	tip      *tool
+	// fileEvent is what last happened to the file, for the toolbar:
+	// Opened, Saved, Reloaded, or New for one not made yet.
+	fileEvent string
+	// notice is a message shown in the toolbar, or over the viewer, until
+	// noticeUntil.
 	notice      string
 	noticeUntil time.Time
 	// focusEditor asks for the editor to take the keyboard next frame.
@@ -253,6 +261,9 @@ func New(opts Options) (*App, error) {
 		fullShaper: make(chan *text.Shaper, 1),
 	}
 	a.load(source)
+	if newFile {
+		a.fileEvent = "New"
+	}
 	a.parsed = string(source)
 	a.focusEditor = a.editing()
 	a.updateTitle()
@@ -557,16 +568,16 @@ func (a *App) frame(gtx layout.Context) {
 	if a.prompt != nil || a.help {
 		under = gtx.Disabled()
 	}
-	// The status line takes the bottom of the window, and the find bar
-	// the line above it.
-	statusH, findH := 0, 0
-	if a.showStatus() {
-		statusH = gtx.Dp(statusHeight)
+	// The toolbar takes the bottom of the window, but for the viewer's,
+	// and the find bar the line above it.
+	toolbarH, findH := 0, 0
+	if a.mode != ModeViewer {
+		toolbarH = gtx.Dp(toolbarHeight)
 	}
 	if a.find.open && a.mode != ModeViewer {
 		findH = gtx.Dp(findHeight)
 	}
-	under.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-statusH-findH, 0)))
+	under.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-toolbarH-findH, 0)))
 	mdTh := &markdown.Theme{
 		Background:        theme.Background,
 		Foreground:        theme.Foreground,
@@ -591,15 +602,15 @@ func (a *App) frame(gtx layout.Context) {
 	if findH > 0 {
 		bar := under
 		bar.Constraints = layout.Exact(image.Pt(size.X, findH))
-		off := op.Offset(image.Pt(0, size.Y-statusH-findH)).Push(gtx.Ops)
+		off := op.Offset(image.Pt(0, size.Y-toolbarH-findH)).Push(gtx.Ops)
 		a.layoutFind(bar, theme)
 		off.Pop()
 	}
-	if statusH > 0 {
-		bar := gtx
-		bar.Constraints = layout.Exact(image.Pt(size.X, statusH))
-		off := op.Offset(image.Pt(0, size.Y-statusH)).Push(gtx.Ops)
-		a.layoutStatus(bar, theme)
+	if toolbarH > 0 {
+		bar := under
+		bar.Constraints = layout.Exact(image.Pt(size.X, toolbarH))
+		off := op.Offset(image.Pt(0, size.Y-toolbarH)).Push(gtx.Ops)
+		a.layoutToolbar(bar, theme)
 		off.Pop()
 	}
 	if a.help {
@@ -608,9 +619,10 @@ func (a *App) frame(gtx layout.Context) {
 	if a.prompt != nil {
 		a.layoutPrompt(gtx, theme)
 	}
-	if a.notice != "" {
+	// Elsewhere the toolbar says what the notice says.
+	if a.notice != "" && a.mode == ModeViewer {
 		above := gtx
-		above.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-statusH-findH, 0)))
+		above.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-toolbarH-findH, 0)))
 		a.layoutNotice(above, theme)
 	}
 	// Wake up for the parse, save or notice waiting on typing to stop.
@@ -733,20 +745,9 @@ func (a *App) shortcut(e key.Event) {
 			a.save()
 		}
 	case "E":
-		switch a.mode {
-		case ModeEdit:
-			a.setMode(ModeInline)
-		case ModeViewer:
-			a.viewer.OnEdit(a.viewer.CurIndex)
-		default:
-			a.setMode(ModeEdit)
-		}
+		a.toggleSource()
 	case "\\":
-		if a.mode == ModeSplit {
-			a.setMode(ModeInline)
-		} else {
-			a.setMode(ModeSplit)
-		}
+		a.toggleSplit()
 	case "?", key.NameF1:
 		a.help = true
 	case "F":
@@ -759,6 +760,28 @@ func (a *App) shortcut(e key.Event) {
 		a.mdView.ResetTextZoom()
 	}
 	a.window.Invalidate()
+}
+
+// toggleSource shows the source, or the view again. From the viewer it
+// edits the diagram shown.
+func (a *App) toggleSource() {
+	switch a.mode {
+	case ModeEdit:
+		a.setMode(ModeInline)
+	case ModeViewer:
+		a.viewer.OnEdit(a.viewer.CurIndex)
+	default:
+		a.setMode(ModeEdit)
+	}
+}
+
+// toggleSplit shows the source beside the view, or the view alone again.
+func (a *App) toggleSplit() {
+	if a.mode == ModeSplit {
+		a.setMode(ModeInline)
+	} else {
+		a.setMode(ModeSplit)
+	}
 }
 
 // reportMetrics prints start-up time and memory after the first frame.

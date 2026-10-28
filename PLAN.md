@@ -190,9 +190,10 @@ declarations may go inside a `box`.
   100 %, `W` / `H` fit width / height, `[` / `]` go to the previous / next
   diagram, `N` toggles sequence numbers, `E` jumps into the source at that
   diagram, and `Esc` closes.
-- **Sticky participants:** in a tall diagram the actor row stays pinned at
-  the top of the viewer while scrolling. It's cheap natively: draw the top
-  actors again in a fixed layer.
+- **Sticky participants:** in a tall diagram the participants' names stay
+  pinned at the top of the viewer while scrolling, in a strip of the same
+  small height at any zoom, each name over its lifeline and cut short to
+  the room between lifelines.
 - **Focus a participant:** click an actor to dim every message, note and
   activation that doesn't involve it.
 - **Other Mermaid types:** shown as a code block with a "`R` to render with
