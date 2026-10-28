@@ -1,0 +1,173 @@
+package app
+
+import (
+	"image"
+	"testing"
+
+	"dyamark/fonts"
+	layoutPkg "dyamark/seq/layout"
+	"dyamark/seq/parse"
+
+	"gioui.org/f32"
+	"gioui.org/io/input"
+	"gioui.org/io/key"
+	"gioui.org/io/pointer"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/text"
+	"gioui.org/unit"
+	"gioui.org/widget/material"
+)
+
+// viewerFrames returns a router feeding v and a function that lays out one
+// frame of it at size.
+func viewerFrames(t *testing.T, v *Viewer, size image.Point) (*input.Router, func()) {
+	t.Helper()
+	collection, err := fonts.Collection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	th := material.NewTheme()
+	th.Shaper = text.NewShaper(text.WithCollection(collection), text.NoSystemFonts())
+	r := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+		Constraints: layout.Exact(size),
+		Source:      r.Source(),
+	}
+	return r, func() {
+		gtx.Reset()
+		v.Layout(gtx, th, DefaultTheme(10))
+		r.Frame(gtx.Ops)
+	}
+}
+
+// onScreen returns the middle of the actor's box on screen.
+func onScreen(v *Viewer, a layoutPkg.Actor) f32.Point {
+	vb := v.Diagram.ViewBox
+	return f32.Pt(v.Pan.X+(a.Rect.X+a.Rect.W/2-vb.X)*v.Zoom, v.Pan.Y+(a.Rect.Y+a.Rect.H/2-vb.Y)*v.Zoom)
+}
+
+// click presses and releases the primary button at from, moving to to in
+// between.
+func click(r *input.Router, frame func(), from, to f32.Point) {
+	r.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: from})
+	frame()
+	if to != from {
+		r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: to})
+		frame()
+	}
+	r.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: to})
+	frame()
+}
+
+func viewerOf(t *testing.T, src string) *Viewer {
+	t.Helper()
+	d, err := parse.Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewViewer([]*parse.Diagram{d}, 0)
+}
+
+// Clicking a participant focuses it; clicking it again, or Esc, shows all
+// again, and only a second Esc closes the viewer. A drag pans and leaves
+// the focus alone.
+func TestViewerFocusParticipant(t *testing.T) {
+	v := viewerOf(t, sampleMMD1)
+	closed := false
+	v.OnClose = func() { closed = true }
+	r, frame := viewerFrames(t, v, image.Pt(800, 600))
+	frame()
+
+	bob := v.Diagram.Actors[1]
+	if bob.ID != "Bob" {
+		t.Fatalf("second actor is %q", bob.ID)
+	}
+	at := onScreen(v, bob)
+	click(r, frame, at, at)
+	if v.Focus != "Bob" {
+		t.Fatalf("focus %q after clicking Bob", v.Focus)
+	}
+
+	pan := v.Pan
+	click(r, frame, at, at.Add(f32.Pt(60, 0)))
+	if v.Focus != "Bob" || v.Pan == pan {
+		t.Errorf("a drag changed the focus to %q, or didn't pan", v.Focus)
+	}
+
+	click(r, frame, onScreen(v, bob), onScreen(v, bob))
+	if v.Focus != "" {
+		t.Errorf("clicking Bob again left focus %q", v.Focus)
+	}
+
+	click(r, frame, onScreen(v, bob), onScreen(v, bob))
+	r.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	frame()
+	if v.Focus != "" || closed {
+		t.Fatalf("Esc: focus %q, closed %v", v.Focus, closed)
+	}
+	r.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	frame()
+	if !closed {
+		t.Error("second Esc didn't close the viewer")
+	}
+}
+
+// The focus lasts through a save that keeps the participant, and goes
+// when it's gone or another diagram is shown.
+func TestViewerFocusThroughReload(t *testing.T) {
+	d1, _ := parse.Parse(sampleMMD1)
+	d2, _ := parse.Parse(sampleMMD1 + "\nAlice->>Bob: again")
+	d3, _ := parse.Parse("sequenceDiagram\nAlice->>Carol: hi")
+	v := NewViewer([]*parse.Diagram{d1}, 0)
+	v.Focus = "Bob"
+	v.ReloadDiagrams([]*parse.Diagram{d2}, 0)
+	if v.Focus != "Bob" {
+		t.Error("a save dropped the focus")
+	}
+	v.ReloadDiagrams([]*parse.Diagram{d3}, 0)
+	if v.Focus != "" {
+		t.Error("focus kept on a participant that's gone")
+	}
+	v.Focus = "Alice"
+	v.SetDiagrams([]*parse.Diagram{d1, d3}, 1)
+	if v.Focus != "" {
+		t.Error("focus kept on another diagram")
+	}
+}
+
+// Scrolled down a tall diagram, the participant row is pinned at the top,
+// and clicking a pinned participant focuses it. A participant created
+// part way down isn't in the row.
+func TestStickyRow(t *testing.T) {
+	src := "sequenceDiagram\nparticipant A\nparticipant B\n"
+	for range 30 {
+		src += "A->>B: ping\n"
+	}
+	src += "create participant C\nB->>C: new\n"
+	v := viewerOf(t, src)
+	r, frame := viewerFrames(t, v, image.Pt(800, 400))
+	frame()
+	v.Set100(800, 400)
+	v.Pan.Y = 20
+	if _, _, _, ok := v.stickyRow(); ok {
+		t.Fatal("pinned while the row is on screen")
+	}
+	v.Pan.Y = -600
+	frame()
+	row, headerH, top, ok := v.stickyRow()
+	if !ok || len(row) != 2 {
+		t.Fatalf("pinned row: ok %v, %d actors", ok, len(row))
+	}
+	b := row[1]
+	at := f32.Pt(v.Pan.X+(b.Rect.X+b.Rect.W/2-v.Diagram.ViewBox.X)*v.Zoom, top+b.Rect.H/2*v.Zoom)
+	if at.Y >= headerH {
+		t.Fatalf("B's pinned box at y %f is below the header (%f)", at.Y, headerH)
+	}
+	click(r, frame, at, at)
+	if v.Focus != "B" {
+		t.Errorf("clicking pinned B focused %q", v.Focus)
+	}
+}

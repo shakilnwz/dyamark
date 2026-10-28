@@ -2,6 +2,9 @@ package app
 
 import (
 	"image"
+	"image/color"
+	"math"
+	"strings"
 
 	"dyamark/seq"
 	"dyamark/seq/draw"
@@ -42,6 +45,13 @@ type Viewer struct {
 	drag      gesture.Drag
 	dragStart f32.Point
 	panStart  f32.Point
+	// moved is set once a press has moved far enough to be a drag rather
+	// than a click.
+	moved bool
+
+	// Focus is the ID of the participant clicked on, whose messages,
+	// notes and activations stay bright while the rest is dimmed.
+	Focus string
 
 	// Callbacks
 	OnClose func()
@@ -64,6 +74,7 @@ func NewViewer(diagrams []*parse.Diagram, initialIndex int) *Viewer {
 // SetAST loads an AST into the viewer and computes its layout.
 func (v *Viewer) SetAST(ast *parse.Diagram) {
 	v.numbersFlipped = false
+	v.Focus = ""
 	v.layoutAST(ast)
 	if ast != nil {
 		v.fitted = false
@@ -115,6 +126,10 @@ func (v *Viewer) ReloadDiagrams(diagrams []*parse.Diagram, index int) {
 	v.Diagrams = diagrams
 	v.CurIndex = index
 	v.layoutAST(diagrams[index])
+	// The focused participant may have been renamed or removed.
+	if v.Focus != "" && v.actorLabel(v.Focus) == "" {
+		v.Focus = ""
+	}
 }
 
 // ToggleSequenceNumbers toggles sequence numbers visibility.
@@ -253,10 +268,14 @@ func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) l
 	// Background fill
 	paint.FillShape(gtx.Ops, oTheme.Background, clip.Rect(image.Rectangle{Max: size}).Op())
 
-	// Set cursor shape: open hand (Grab) or closed hand (Grabbing)
-	if v.drag.Dragging() {
+	// A closed hand while dragging, a pointing one over a participant
+	// that can be clicked, an open one elsewhere.
+	switch {
+	case v.drag.Dragging():
 		pointer.CursorGrabbing.Add(gtx.Ops)
-	} else {
+	case v.actorAt(v.pointerPos, size) != "":
+		pointer.CursorPointer.Add(gtx.Ops)
+	default:
 		pointer.CursorGrab.Add(gtx.Ops)
 	}
 
@@ -280,10 +299,14 @@ func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) l
 	diagTheme := seq.ResolveTheme(oTheme.Seq, themeName, themeVars)
 
 	// Draw diagram transformed by (Pan, Zoom)
-	v.drawDiagram(gtx, th, diagTheme, size)
+	v.drawDiagram(gtx, th, diagTheme, oTheme.Background, size)
 
 	// Draw sticky participant header if scrolled down
 	v.drawStickyActors(gtx, th, diagTheme, oTheme, size)
+
+	if v.Focus != "" {
+		v.drawFocusHint(gtx, th, oTheme, size)
+	}
 
 	return layout.Dimensions{Size: size}
 }
@@ -301,10 +324,26 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 		case pointer.Press:
 			v.dragStart = ev.Position
 			v.panStart = v.Pan
+			v.moved = false
 		case pointer.Drag:
 			delta := ev.Position.Sub(v.dragStart)
+			if delta.X*delta.X+delta.Y*delta.Y > clickSlop*clickSlop {
+				v.moved = true
+			}
 			v.Pan = v.panStart.Add(delta)
 			gtx.Execute(op.InvalidateCmd{})
+		case pointer.Release:
+			if !v.moved {
+				// A press that didn't move is a click: on a participant
+				// it focuses it, again or elsewhere it lets go.
+				v.Pan = v.panStart
+				id := v.actorAt(ev.Position, size)
+				if id == v.Focus {
+					id = ""
+				}
+				v.Focus = id
+				gtx.Execute(op.InvalidateCmd{})
+			}
 		}
 	}
 
@@ -363,7 +402,10 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 
 			switch e.Name {
 			case key.NameEscape:
-				if v.OnClose != nil {
+				switch {
+				case v.Focus != "":
+					v.Focus = ""
+				case v.OnClose != nil:
 					v.OnClose()
 				}
 			case "0":
@@ -393,7 +435,7 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 	}
 }
 
-func (v *Viewer) drawDiagram(gtx layout.Context, th *material.Theme, seqTh seq.Theme, size image.Point) {
+func (v *Viewer) drawDiagram(gtx layout.Context, th *material.Theme, seqTh seq.Theme, bg color.NRGBA, size image.Point) {
 	// Clip to viewer bounds
 	clipStack := clip.Rect(image.Rectangle{Max: size}).Push(gtx.Ops)
 	defer clipStack.Pop()
@@ -407,39 +449,120 @@ func (v *Viewer) drawDiagram(gtx layout.Context, th *material.Theme, seqTh seq.T
 	diagGtx.Constraints = layout.Exact(image.Pt(int(v.Diagram.ViewBox.W), int(v.Diagram.ViewBox.H)))
 
 	draw.Draw(diagGtx, th, seqTh, v.Diagram)
+	if v.Focus != "" {
+		v.dimExcept(diagGtx, th, seqTh, v.Diagram, bg)
+	}
 }
 
-// drawStickyActors draws top actors pinned to the top of the viewer when
-// scrolling tall diagrams.
-func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh seq.Theme, oTheme *Theme, size image.Point) {
-	if v.Diagram == nil || len(v.Diagram.Actors) == 0 {
-		return
-	}
+// clickSlop is how far, in px, a press may move and still be a click.
+const clickSlop = 4
 
-	// Find the top actor row (actors with Y <= actorHeight + margin)
-	var topActors []layoutPkg.Actor
-	var maxActorH float32
+// dimExcept washes diag over with bg and draws the parts involving the
+// focused participant again on top, at full strength.
+func (v *Viewer) dimExcept(gtx layout.Context, th *material.Theme, seqTh seq.Theme, diag *layoutPkg.Diagram, bg color.NRGBA) {
+	vb := diag.ViewBox
+	paint.FillShape(gtx.Ops, withAlpha(bg, 200), clip.Rect(image.Rect(0, 0, int(vb.W)+1, int(vb.H)+1)).Op())
+	draw.Draw(gtx, th, seqTh, diag.Involving(v.Focus))
+}
+
+// stickyRow returns the participant row as it's pinned to the top of the
+// viewer once the diagram is scrolled up past it: the actors in it, its
+// header's height and where it puts the actors' top, in screen px. ok is
+// false while the row is still on screen by itself.
+func (v *Viewer) stickyRow() (actors []layoutPkg.Actor, headerH, top float32, ok bool) {
+	if v.Diagram == nil {
+		return nil, 0, 0, false
+	}
+	// The row is the heads at the top; a participant created later has
+	// its head further down, and the feet are at the bottom.
+	rowY := float32(math.Inf(1))
 	for _, a := range v.Diagram.Actors {
-		if a.Rect.Y < 80 {
-			topActors = append(topActors, a)
-			if a.Rect.H > maxActorH {
-				maxActorH = a.Rect.H
-			}
+		if !a.Footer {
+			rowY = min(rowY, a.Rect.Y)
 		}
 	}
-	if len(topActors) == 0 {
-		return
+	var maxH float32
+	for _, a := range v.Diagram.Actors {
+		if !a.Footer && a.Rect.Y <= rowY+1 {
+			actors = append(actors, a)
+			maxH = max(maxH, a.Rect.H)
+		}
 	}
-
-	// Top actors position in screen coordinates
-	topY := v.Pan.Y + (topActors[0].Rect.Y-v.Diagram.ViewBox.Y)*v.Zoom
-	headerH := (maxActorH + 20) * v.Zoom
-	if headerH < 44 {
-		headerH = 44
+	if len(actors) == 0 {
+		return nil, 0, 0, false
 	}
+	if v.Pan.Y+(rowY-v.Diagram.ViewBox.Y)*v.Zoom >= 0 {
+		return nil, 0, 0, false
+	}
+	return actors, max((maxH+20)*v.Zoom, 44), stickyPad, true
+}
 
-	// Only show sticky header if the top actors are scrolled above the viewport
-	if topY >= 0 {
+// stickyPad is the gap above the pinned participant row.
+const stickyPad = 10
+
+// toDiagram turns a point on screen into diagram coordinates.
+func (v *Viewer) toDiagram(p f32.Point) f32.Point {
+	vb := v.Diagram.ViewBox
+	return f32.Pt((p.X-v.Pan.X)/v.Zoom+vb.X, (p.Y-v.Pan.Y)/v.Zoom+vb.Y)
+}
+
+// actorAt returns the ID of the participant box at p on screen, pinned or
+// not, or "".
+func (v *Viewer) actorAt(p f32.Point, size image.Point) string {
+	if v.Diagram == nil || v.Zoom <= 0 {
+		return ""
+	}
+	in := func(a layoutPkg.Actor, q f32.Point) bool {
+		r := a.Rect
+		return q.X >= r.X && q.X <= r.X+r.W && q.Y >= r.Y && q.Y <= r.Y+r.H
+	}
+	if row, headerH, top, ok := v.stickyRow(); ok && p.Y < headerH {
+		// The pinned row covers the diagram under it.
+		q := v.toDiagram(p)
+		q.Y = (p.Y-top)/v.Zoom + row[0].Rect.Y
+		for _, a := range row {
+			if in(a, q) {
+				return a.ID
+			}
+		}
+		return ""
+	}
+	q := v.toDiagram(p)
+	for _, a := range v.Diagram.Actors {
+		if in(a, q) {
+			return a.ID
+		}
+	}
+	return ""
+}
+
+// actorLabel returns the participant id's label as drawn, or "" if the
+// diagram has no such participant.
+func (v *Viewer) actorLabel(id string) string {
+	if v.Diagram == nil {
+		return ""
+	}
+	for _, a := range v.Diagram.Actors {
+		if a.ID != id {
+			continue
+		}
+		var lines []string
+		for _, t := range a.Label {
+			lines = append(lines, t.Text)
+		}
+		if label := strings.Join(lines, " "); label != "" {
+			return label
+		}
+		return id
+	}
+	return ""
+}
+
+// drawStickyActors pins the participant row to the top of the viewer once
+// a tall diagram is scrolled up past it.
+func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh seq.Theme, oTheme *Theme, size image.Point) {
+	row, headerH, top, ok := v.stickyRow()
+	if !ok {
 		return
 	}
 
@@ -456,22 +579,46 @@ func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh 
 	sep.LineTo(f32.Pt(float32(size.X), sepY))
 	paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 40), clip.Stroke{Path: sep.End(), Width: 1}.Op())
 
-	// Draw pinned actors: translate X with Pan.X, keep Y fixed at pad
-	pinnedY := float32(10.0)
-	actorTrans := op.Affine(f32.Affine2D{}.Scale(f32.Pt(0, 0), f32.Pt(v.Zoom, v.Zoom)).Offset(f32.Pt(v.Pan.X, pinnedY))).Push(gtx.Ops)
+	// Draw pinned actors: translate X with Pan.X, keep Y fixed at the top.
+	actorTrans := op.Affine(f32.Affine2D{}.Scale(f32.Pt(0, 0), f32.Pt(v.Zoom, v.Zoom)).Offset(f32.Pt(v.Pan.X, top))).Push(gtx.Ops)
 
 	diagGtx := gtx
 	diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
 
-	// Start the viewBox at the actor row so it lands at pinnedY.
+	// Start the viewBox at the actor row so it lands at the top.
 	vb := v.Diagram.ViewBox
-	vb.Y = topActors[0].Rect.Y
+	vb.Y = row[0].Rect.Y
 	subDiag := &layoutPkg.Diagram{
-		Actors:  topActors,
+		Actors:  row,
 		ViewBox: vb,
 	}
 	draw.Draw(diagGtx, th, seqTh, subDiag)
+	if v.Focus != "" {
+		v.dimExcept(diagGtx, th, seqTh, subDiag, oTheme.Background)
+	}
 
 	actorTrans.Pop()
 	hdrClip.Pop()
+}
+
+// drawFocusHint says at the bottom of the viewer who is focused and how
+// to stop.
+func (v *Viewer) drawFocusHint(gtx layout.Context, th *material.Theme, oTheme *Theme, size image.Point) {
+	pad := gtx.Dp(8)
+	rec := op.Record(gtx.Ops)
+	lbl := material.Body2(th, "Showing "+v.actorLabel(v.Focus)+" · click it again or press Esc to show all")
+	lbl.Color = oTheme.Foreground
+	lbl.MaxLines = 1
+	inner := gtx
+	inner.Constraints = layout.Constraints{Max: image.Pt(max(size.X-4*pad, 0), size.Y)}
+	dims := lbl.Layout(inner)
+	text := rec.Stop()
+
+	box := image.Rectangle{Min: image.Pt(pad, size.Y-dims.Size.Y-3*pad)}
+	box.Max = box.Min.Add(dims.Size.Add(image.Pt(2*pad, 2*pad)))
+	r := gtx.Dp(unit.Dp(float32(oTheme.Rounding)))
+	paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 230), clip.UniformRRect(box, r).Op(gtx.Ops))
+	off := op.Offset(box.Min.Add(image.Pt(pad, pad))).Push(gtx.Ops)
+	text.Add(gtx.Ops)
+	off.Pop()
 }

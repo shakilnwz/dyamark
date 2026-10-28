@@ -285,7 +285,7 @@ dyamark/
    reload.
 5. **Editing.** *Done.* Editor, split view with per-diagram caching, atomic save and
    auto-save, external-change prompts, portal open/save.
-6. **Sequence extras.** Pinned participant row, focus-a-participant, and
+6. **Sequence extras.** *Done.* Pinned participant row, focus-a-participant, and
    the sequence-numbers toggle.
 7. **Packaging.** PKGBUILD, `.desktop`, icon, `?` overlay, and a README with
    a screenshot made from sample content.

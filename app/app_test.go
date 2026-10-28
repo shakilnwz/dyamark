@@ -58,6 +58,11 @@ func TestDefaultSampleMarkdownParses(t *testing.T) {
 	if doc.Sequences[0].AST == nil || doc.Sequences[0].AST.Title != "Authentication Sequence Flow" {
 		t.Errorf("expected title 'Authentication Sequence Flow', got %v", doc.Sequences[0].AST)
 	}
+	// A participant's name can't have a space before `as`: Mermaid reads
+	// the whole line as the name and makes a fourth participant.
+	if n := len(doc.Sequences[0].AST.Participants); n != 3 {
+		t.Errorf("the sample has %d participants, want 3", n)
+	}
 }
 
 func TestFileWatcher(t *testing.T) {

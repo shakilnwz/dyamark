@@ -127,21 +127,21 @@ Click or press **Enter** on the sequence diagram below to open it in the fullscr
 ` + "```mermaid" + `
 sequenceDiagram
 title Authentication Sequence Flow
-participant Alice as Alice
-participant API Gateway as API Gateway
-participant Database as Database
+participant Alice
+participant API as API Gateway
+participant Database
 
-Alice->>API Gateway: POST /api/session
-activate API Gateway
+Alice->>API: POST /api/session
+activate API
 opt Valid JWT Credentials
-    API Gateway->>Database: SELECT user, hash FROM users
+    API->>Database: SELECT user, hash FROM users
     activate Database
-    Database-->>API Gateway: 1 row returned
+    Database-->>API: 1 row returned
     deactivate Database
-    Note over API Gateway: Verify Argon2 hash<br/>& issue token
-    API Gateway-->>Alice: 200 OK (JWT Bearer)
+    Note over API: Verify Argon2 hash<br/>& issue token
+    API-->>Alice: 200 OK (JWT Bearer)
 end
-deactivate API Gateway
+deactivate API
 ` + "```" + `
 
 ## Shortcuts
@@ -154,7 +154,8 @@ deactivate API Gateway
 - **0** / **1** / **W** / **H**: Fit to window / 100% / Fit width / Fit height (in viewer)
 - **+** / **-** or **Scroll**: Zoom in / out at pointer
 - **N**: Toggle sequence numbers
-- **Esc**: Close viewer
+- **Click a participant**: Show only what it takes part in (in viewer)
+- **Esc**: Show all again / close viewer
 `
 
 // New creates a new application instance.

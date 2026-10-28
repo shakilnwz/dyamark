@@ -70,10 +70,15 @@ reload when the file changes.
   (xdg-desktop-portal). Closing the window with an unsaved draft asks first.
 - `E` in the viewer jumps to that diagram's source.
 
+**Phase 6 (sequence extras):** done. In the viewer, clicking a
+participant dims every message, note and activation it isn't part of;
+clicking it again or `Esc` shows everything. The pinned participant row
+works with it.
+
 Memory is over the plan's budget: about 105–112 MB RSS, mostly Mesa's
 libraries; Go's own heap is about 10 MB.
 
-Not yet: phases 6–8 in [PLAN.md](PLAN.md).
+Not yet: phases 7 and 8 in [PLAN.md](PLAN.md).
 
 ## Keys
 
@@ -89,6 +94,7 @@ Not yet: phases 6–8 in [PLAN.md](PLAN.md).
 | `[` `]` | Previous / next diagram (viewer) |
 | `N` | Toggle sequence numbers (viewer) |
 | `E` | Edit this diagram's source (viewer) |
+| Click a participant | Show only what it takes part in (viewer) |
 | `R` | Render another Mermaid diagram type with `mmdc` |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Text size |
 | `Esc` | Close the viewer, or cancel a question |
