@@ -130,3 +130,97 @@ func TestAppOpenFile(t *testing.T) {
 		t.Errorf("expected viewer to have laid-out diagram")
 	}
 }
+
+// Reloads arrive on the watcher's goroutine; they must wait for the UI
+// goroutine instead of swapping the document under a frame.
+func TestReloadRunsOnUIGoroutine(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.md")
+	if err := os.WriteFile(p, []byte("# one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{FilePath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.fileWatcher.Close()
+	before := a.doc
+
+	if err := os.WriteFile(p, []byte("# two\n\ntext\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		a.mu.Lock()
+		n := len(a.pending)
+		a.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no reload queued")
+		}
+		if a.doc != before {
+			t.Fatal("document replaced off the UI goroutine")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	a.runPending()
+	if a.doc == before || len(a.doc.Blocks) != 2 {
+		t.Fatalf("reload not applied: %d blocks", len(a.doc.Blocks))
+	}
+}
+
+// A reload queued for a file that has since been replaced is dropped.
+func TestStaleReloadIgnored(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.md")
+	second := filepath.Join(dir, "second.md")
+	if err := os.WriteFile(first, []byte("# first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("# second\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{FilePath: first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := a.fileWatcher
+	if err := a.OpenFile(second); err != nil {
+		t.Fatal(err)
+	}
+	defer a.fileWatcher.Close()
+
+	stale.onReload([]byte("# first again\n"))
+	a.runPending()
+	if len(a.doc.Blocks) != 2 {
+		t.Fatalf("stale reload replaced the new file: %d blocks", len(a.doc.Blocks))
+	}
+}
+
+// Clicking a diagram opens that diagram, even when an earlier one failed
+// to parse and so isn't in the viewer's list.
+func TestOpenViewerSkipsBrokenDiagrams(t *testing.T) {
+	src := "```mermaid\nsequenceDiagram\nA-\n```\n\n" +
+		"```mermaid\nsequenceDiagram\nA->>B: first\n```\n\n" +
+		"```mermaid\nsequenceDiagram\nC->>D: second\n```\n"
+	p := filepath.Join(t.TempDir(), "b.md")
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{FilePath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.fileWatcher.Close()
+	if a.doc.Sequences[0].AST != nil {
+		t.Fatal("expected the first diagram to fail to parse")
+	}
+
+	a.mdView.OnOpenViewer(a.doc.Sequences[1])
+	if a.viewer.AST != a.doc.Sequences[1].AST {
+		t.Errorf("opened diagram %d, want the clicked one", a.viewer.CurIndex)
+	}
+}

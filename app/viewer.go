@@ -401,7 +401,7 @@ func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh 
 	}
 
 	// Top actors position in screen coordinates
-	topY := v.Pan.Y + topActors[0].Rect.Y*v.Zoom
+	topY := v.Pan.Y + (topActors[0].Rect.Y-v.Diagram.ViewBox.Y)*v.Zoom
 	headerH := (maxActorH + 20) * v.Zoom
 	if headerH < 44 {
 		headerH = 44
@@ -432,9 +432,12 @@ func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh 
 	diagGtx := gtx
 	diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
 
+	// Start the viewBox at the actor row so it lands at pinnedY.
+	vb := v.Diagram.ViewBox
+	vb.Y = topActors[0].Rect.Y
 	subDiag := &layoutPkg.Diagram{
 		Actors:  topActors,
-		ViewBox: v.Diagram.ViewBox,
+		ViewBox: vb,
 	}
 	draw.Draw(diagGtx, th, seqTh, subDiag)
 

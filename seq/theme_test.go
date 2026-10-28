@@ -73,4 +73,26 @@ func TestParseColor(t *testing.T) {
 	if c := ParseColor("invalid", fallback); c != fallback {
 		t.Errorf("expected fallback, got %v", c)
 	}
+
+	faint := color.NRGBA{R: 10, G: 20, B: 30, A: 40}
+	cases := map[string]color.NRGBA{
+		"#123456":                    {R: 0x12, G: 0x34, B: 0x56, A: 255},
+		"#12345680":                  {R: 0x12, G: 0x34, B: 0x56, A: 0x80},
+		"#0f08":                      {R: 0, G: 255, B: 0, A: 0x88},
+		"Aqua":                       {R: 0, G: 255, B: 255, A: 255},
+		"orange":                     {R: 255, G: 165, B: 0, A: 255},
+		"rgb(255, 0, 0)":             {R: 255, A: 255},
+		"rgba(0, 0, 255, 0.5)":       {B: 255, A: 128},
+		"rgb(0 128 0 / 50%)":         {G: 128, A: 128},
+		"rgb(100%, 0%, 0%)":          {R: 255, A: 255},
+		"hsl(120, 100%, 50%)":        {G: 255, A: 255},
+		"hsla(240deg, 100%, 50%, 1)": {B: 255, A: 255},
+		"rgb(1, 2)":                  faint,
+		"#12":                        faint,
+	}
+	for in, want := range cases {
+		if got := ParseColor(in, faint); got != want {
+			t.Errorf("ParseColor(%q) = %v, want %v", in, got, want)
+		}
+	}
 }

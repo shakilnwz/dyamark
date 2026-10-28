@@ -70,6 +70,9 @@ type App struct {
 
 	mu    sync.Mutex
 	theme *Theme
+	// pending holds work from other goroutines that touches the document
+	// or views; it runs on the UI goroutine at the start of the next frame.
+	pending []func()
 }
 
 // DefaultSampleMarkdown is shown when dyamark is launched without arguments.
@@ -193,12 +196,12 @@ func New(opts Options) (*App, error) {
 	mdView.OnOpenViewer = func(block *markdown.SequenceBlock) {
 		var asts []*parse.Diagram
 		selectedIdx := 0
-		for i, seq := range a.doc.Sequences {
+		for _, seq := range a.doc.Sequences {
+			if seq == block {
+				selectedIdx = len(asts)
+			}
 			if seq.AST != nil {
 				asts = append(asts, seq.AST)
-			}
-			if seq == block {
-				selectedIdx = i
 			}
 		}
 		if len(asts) > 0 {
@@ -211,13 +214,14 @@ func New(opts Options) (*App, error) {
 	mdView.OnRenderMermaid = func(block *markdown.MermaidOtherBlock) {
 		go func() {
 			img, err := a.cache.RenderMmdc(block.Source)
-			if err != nil {
-				block.RenderError = err.Error()
-			} else {
-				block.Rendered = img
-				block.RenderError = ""
-			}
-			a.window.Invalidate()
+			a.post(func() {
+				if err != nil {
+					block.RenderError = err.Error()
+				} else {
+					block.Rendered = img
+					block.RenderError = ""
+				}
+			})
 		}()
 	}
 
@@ -227,22 +231,7 @@ func New(opts Options) (*App, error) {
 	}
 
 	if opts.FilePath != "" {
-		a.fileWatcher, err = WatchFile(opts.FilePath, func(newData []byte) {
-			newDoc := markdown.Parse(newData, a.cache)
-			a.doc = newDoc
-			a.mdView.SetDocument(newDoc)
-
-			var asts []*parse.Diagram
-			for _, s := range newDoc.Sequences {
-				if s.AST != nil {
-					asts = append(asts, s.AST)
-				}
-			}
-			if len(asts) > 0 {
-				a.viewer.SetDiagrams(asts, a.viewer.CurIndex)
-			}
-			a.window.Invalidate()
-		})
+		a.fileWatcher, err = a.watch(opts.FilePath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "dyamark: cannot watch %s: %v\n", opts.FilePath, err)
 		}
@@ -306,24 +295,62 @@ func (a *App) OpenFile(filePath string) error {
 		a.fileWatcher.Close()
 		a.fileWatcher = nil
 	}
-	a.fileWatcher, _ = WatchFile(filePath, func(newData []byte) {
-		newDoc := markdown.Parse(newData, a.cache)
-		a.doc = newDoc
-		a.mdView.SetDocument(newDoc)
-		var newASTs []*parse.Diagram
-		for _, s := range newDoc.Sequences {
-			if s.AST != nil {
-				newASTs = append(newASTs, s.AST)
-			}
-		}
-		if len(newASTs) > 0 {
-			a.viewer.SetDiagrams(newASTs, a.viewer.CurIndex)
-		}
-		a.window.Invalidate()
-	})
+	a.fileWatcher, _ = a.watch(filePath)
 
 	a.window.Invalidate()
 	return nil
+}
+
+// watch follows filePath and reloads the document when it changes on disk.
+func (a *App) watch(filePath string) (*FileWatcher, error) {
+	var fw *FileWatcher
+	fw, err := WatchFile(filePath, func(newData []byte) {
+		a.post(func() {
+			// A reload already queued for a file that has since been
+			// replaced by another must not overwrite it.
+			if a.fileWatcher != fw {
+				return
+			}
+			a.reload(newData)
+		})
+	})
+	return fw, err
+}
+
+// reload replaces the document with newData, keeping the viewer's place.
+func (a *App) reload(newData []byte) {
+	newDoc := markdown.Parse(newData, a.cache)
+	a.doc = newDoc
+	a.mdView.SetDocument(newDoc)
+
+	var asts []*parse.Diagram
+	for _, s := range newDoc.Sequences {
+		if s.AST != nil {
+			asts = append(asts, s.AST)
+		}
+	}
+	if len(asts) > 0 {
+		a.viewer.SetDiagrams(asts, a.viewer.CurIndex)
+	}
+}
+
+// post queues f to run on the UI goroutine before the next frame.
+func (a *App) post(f func()) {
+	a.mu.Lock()
+	a.pending = append(a.pending, f)
+	a.mu.Unlock()
+	a.window.Invalidate()
+}
+
+// runPending runs the work queued by post.
+func (a *App) runPending() {
+	a.mu.Lock()
+	pending := a.pending
+	a.pending = nil
+	a.mu.Unlock()
+	for _, f := range pending {
+		f()
+	}
 }
 
 func (a *App) currentTheme() *Theme {
@@ -337,9 +364,13 @@ func (a *App) Run() error {
 	if a.themeWatcher != nil {
 		defer a.themeWatcher.Close()
 	}
-	if a.fileWatcher != nil {
-		defer a.fileWatcher.Close()
-	}
+	// The file watcher is replaced when another file is opened, so close
+	// whichever one is current at the end.
+	defer func() {
+		if a.fileWatcher != nil {
+			a.fileWatcher.Close()
+		}
+	}()
 	firstFrameDone := false
 
 	for {
@@ -348,6 +379,7 @@ func (a *App) Run() error {
 			return e.Err
 
 		case app.FrameEvent:
+			a.runPending()
 			gtx := app.NewContext(&a.ops, e)
 			select {
 			case s := <-a.fullShaper:

@@ -27,6 +27,11 @@ func Draw(gtx layout.Context, th *material.Theme, seqTh seq.Theme, diag *layoutP
 
 	d := painter{gtx: gtx, th: th, seq: seqTh}
 
+	// Layout coordinates start at the viewBox origin, which is usually
+	// negative (the left margin, the title above the actors). Callers treat
+	// the diagram as occupying (0,0)-(W,H), so shift it into place.
+	defer op.Affine(f32.Affine2D{}.Offset(f32.Pt(-diag.ViewBox.X, -diag.ViewBox.Y))).Push(gtx.Ops).Pop()
+
 	// 1. Background Rects
 	for _, bg := range diag.Rects {
 		r := rect(bg.Rect.X, bg.Rect.Y, bg.Rect.X+bg.Rect.W, bg.Rect.Y+bg.Rect.H)
@@ -47,7 +52,8 @@ func Draw(gtx layout.Context, th *material.Theme, seqTh seq.Theme, diag *layoutP
 	// 3. Frames
 	for _, f := range diag.Frames {
 		r := rect(f.Rect.X, f.Rect.Y, f.Rect.X+f.Rect.W, f.Rect.Y+f.Rect.H)
-		d.box(r, seqTh.Rounding, seqTh.FrameBkg, seqTh.FrameBorder, 1)
+		// Mermaid leaves frames unfilled; only the keyword tab is filled.
+		d.box(r, seqTh.Rounding, color.NRGBA{}, seqTh.FrameBorder, 1)
 
 		if len(f.Tab) >= 3 {
 			var p clip.Path
@@ -269,8 +275,12 @@ func (d painter) cubicCurve(p0, p1, p2, p3 f32.Point, width float32, col color.N
 
 func (d painter) dashedPolyline(pts []f32.Point, width float32, col color.NRGBA) {
 	const dash, gap = 6.0, 4.0
+	if len(pts) < 2 {
+		return
+	}
 	var p clip.Path
 	p.Begin(d.gtx.Ops)
+	p.MoveTo(pts[0])
 	curDist := float32(0)
 	drawing := true
 	for i := 0; i < len(pts)-1; i++ {
@@ -466,7 +476,7 @@ func roundRect(ops *op.Ops, r frect, radius float32) clip.PathSpec {
 	p.LineTo(f32.Pt(x0+radius, y1))
 	p.CubeTo(f32.Pt(x0+radius-c, y1), f32.Pt(x0, y1-radius+c), f32.Pt(x0, y1-radius))
 	p.LineTo(f32.Pt(x0, y0+radius))
-	p.CubeTo(f32.Pt(x0, y0+radius-c), f32.Pt(x0-radius-c, y0), f32.Pt(x0+radius, y0))
+	p.CubeTo(f32.Pt(x0, y0+radius-c), f32.Pt(x0+radius-c, y0), f32.Pt(x0+radius, y0))
 	p.Close()
 	return p.End()
 }

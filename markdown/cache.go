@@ -73,15 +73,30 @@ func (c *DiagramCache) GetOrLayout(source string, blockIndex int) (*parse.Diagra
 
 // RenderMmdc renders a non-sequence Mermaid diagram with mmdc, caching the
 // output PNG on disk in ~/.cache/dyamark/.
+// The cache lock isn't held while mmdc runs, which can take seconds, so
+// parsing and layout aren't blocked meanwhile.
 func (c *DiagramCache) RenderMmdc(source string) (image.Image, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(source)))
-	if img, ok := c.pngCache[hash]; ok {
+	c.mu.Lock()
+	img, ok := c.pngCache[hash]
+	c.mu.Unlock()
+	if ok {
 		return img, nil
 	}
 
+	img, err := renderMmdc(source, hash)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.pngCache[hash] = img
+	c.mu.Unlock()
+	return img, nil
+}
+
+// renderMmdc loads the PNG for hash from the disk cache, or makes it with
+// mmdc.
+func renderMmdc(source, hash string) (image.Image, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		cacheDir = os.TempDir()
@@ -98,7 +113,6 @@ func (c *DiagramCache) RenderMmdc(source string) (image.Image, error) {
 			defer f.Close()
 			img, err := png.Decode(f)
 			if err == nil {
-				c.pngCache[hash] = img
 				return img, nil
 			}
 		}
@@ -109,11 +123,19 @@ func (c *DiagramCache) RenderMmdc(source string) (image.Image, error) {
 		return nil, fmt.Errorf("mmdc not found in PATH")
 	}
 
-	tmpInput := filepath.Join(dyamarkCache, "tmp-"+hash+".mmd")
-	if err := os.WriteFile(tmpInput, []byte(source), 0o644); err != nil {
+	tmp, err := os.CreateTemp(dyamarkCache, "tmp-*.mmd")
+	if err != nil {
 		return nil, err
 	}
+	tmpInput := tmp.Name()
 	defer os.Remove(tmpInput)
+	_, err = tmp.WriteString(source)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return nil, err
+	}
 
 	cmd := exec.Command(mmdcPath, "-i", tmpInput, "-o", pngPath, "-b", "transparent")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -126,11 +148,5 @@ func (c *DiagramCache) RenderMmdc(source string) (image.Image, error) {
 	}
 	defer f.Close()
 
-	img, err := png.Decode(f)
-	if err != nil {
-		return nil, err
-	}
-
-	c.pngCache[hash] = img
-	return img, nil
+	return png.Decode(f)
 }
