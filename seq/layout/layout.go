@@ -2,6 +2,7 @@ package layout
 
 import (
 	"math"
+	"slices"
 	"strconv"
 
 	"dyamark/seq/parse"
@@ -765,8 +766,9 @@ func LayoutWithConfig(d *parse.Diagram, cfg Config, m Measurer) (*Diagram, error
 					W: float32(nm.width),
 					H: float32(noteH),
 				},
-				Text: texts,
-				Line: ev.line,
+				Text:   texts,
+				Actors: slices.Clone(ev.note.Participants),
+				Line:   ev.line,
 			})
 
 		case evBlockStart:

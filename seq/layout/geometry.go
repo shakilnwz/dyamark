@@ -1,6 +1,10 @@
 package layout
 
-import "dyamark/seq/parse"
+import (
+	"slices"
+
+	"dyamark/seq/parse"
+)
 
 // Diagram is a laid-out sequence diagram: everything needed to draw it,
 // in the same user-space units (CSS px) as Mermaid's SVG.
@@ -146,7 +150,9 @@ type Frame struct {
 type Note struct {
 	Rect Rect
 	Text []Text
-	Line int
+	// Actors are the IDs of the participants it's beside or over.
+	Actors []string
+	Line   int
 }
 
 // Marker is what's drawn at a message line's end.
@@ -188,4 +194,37 @@ type SequenceNumber struct {
 	Center Point
 	Radius float32
 	Text   Text
+}
+
+// Involving returns the parts of d that involve the participant id: its
+// heads and lifeline, its activations, the messages it sends or gets and
+// the notes on it. It's what stays bright when the participant is focused.
+func (d *Diagram) Involving(id string) *Diagram {
+	out := &Diagram{ViewBox: d.ViewBox, Look: d.Look}
+	for _, a := range d.Actors {
+		if a.ID == id {
+			out.Actors = append(out.Actors, a)
+		}
+	}
+	for _, l := range d.Lifelines {
+		if l.ID == id {
+			out.Lifelines = append(out.Lifelines, l)
+		}
+	}
+	for _, a := range d.Activations {
+		if a.ID == id {
+			out.Activations = append(out.Activations, a)
+		}
+	}
+	for _, m := range d.Messages {
+		if m.From == id || m.To == id {
+			out.Messages = append(out.Messages, m)
+		}
+	}
+	for _, n := range d.Notes {
+		if slices.Contains(n.Actors, id) {
+			out.Notes = append(out.Notes, n)
+		}
+	}
+	return out
 }
