@@ -30,11 +30,14 @@ type Viewer struct {
 	Diagrams []*parse.Diagram
 	CurIndex int
 
-	Zoom       float32
-	Pan        f32.Point
-	fitted     bool
-	lastSize   image.Point
-	pointerPos f32.Point
+	Zoom   float32
+	Pan    f32.Point
+	fitted bool
+	// numbersFlipped is set when N has flipped the diagram's own
+	// sequence-number setting.
+	numbersFlipped bool
+	lastSize       image.Point
+	pointerPos     f32.Point
 
 	drag      gesture.Drag
 	dragStart f32.Point
@@ -60,17 +63,29 @@ func NewViewer(diagrams []*parse.Diagram, initialIndex int) *Viewer {
 
 // SetAST loads an AST into the viewer and computes its layout.
 func (v *Viewer) SetAST(ast *parse.Diagram) {
+	v.numbersFlipped = false
+	v.layoutAST(ast)
+	if ast != nil {
+		v.fitted = false
+	}
+}
+
+// layoutAST lays out ast with its own config, flipped by N if it was
+// pressed.
+func (v *Viewer) layoutAST(ast *parse.Diagram) {
 	v.AST = ast
 	if ast == nil {
 		v.Diagram = nil
 		return
 	}
 	v.Config = layoutPkg.ResolveConfig(ast.Config)
+	if v.numbersFlipped {
+		v.Config.ShowSequenceNumbers = !v.Config.ShowSequenceNumbers
+	}
 	diag, err := layoutPkg.LayoutWithConfig(ast, v.Config, layoutPkg.Default())
 	if err == nil {
 		v.Diagram = diag
 	}
-	v.fitted = false
 }
 
 // SetDiagrams updates the collection of diagrams and picks the current index.
@@ -88,11 +103,24 @@ func (v *Viewer) SetDiagrams(diagrams []*parse.Diagram, index int) {
 	}
 }
 
+// ReloadDiagrams swaps in a new version of the same diagrams, after the
+// file is saved. When index is still the current diagram, it keeps its
+// zoom, pan and N toggle; otherwise it's like SetDiagrams.
+func (v *Viewer) ReloadDiagrams(diagrams []*parse.Diagram, index int) {
+	if index != v.CurIndex || index < 0 || index >= len(diagrams) {
+		v.SetDiagrams(diagrams, index)
+		return
+	}
+	v.Diagrams = diagrams
+	v.layoutAST(diagrams[index])
+}
+
 // ToggleSequenceNumbers toggles sequence numbers visibility.
 func (v *Viewer) ToggleSequenceNumbers() {
 	if v.AST == nil {
 		return
 	}
+	v.numbersFlipped = !v.numbersFlipped
 	v.Config.ShowSequenceNumbers = !v.Config.ShowSequenceNumbers
 	diag, err := layoutPkg.LayoutWithConfig(v.AST, v.Config, layoutPkg.Default())
 	if err == nil {

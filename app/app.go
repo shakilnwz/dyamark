@@ -330,7 +330,7 @@ func (a *App) reload(newData []byte) {
 		}
 	}
 	if len(asts) > 0 {
-		a.viewer.SetDiagrams(asts, a.viewer.CurIndex)
+		a.viewer.ReloadDiagrams(asts, a.viewer.CurIndex)
 	}
 }
 
