@@ -83,7 +83,11 @@ func Draw(gtx layout.Context, th *material.Theme, seqTh seq.Theme, diag *layoutP
 		}
 
 		for _, t := range f.Texts {
-			d.text(t, seqTh.FrameText)
+			col := seqTh.FrameText
+			if t.Kind == layoutPkg.TextFrameKeyword {
+				col = seqTh.LabelText
+			}
+			d.text(t, col)
 		}
 	}
 

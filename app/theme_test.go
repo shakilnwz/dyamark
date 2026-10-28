@@ -22,6 +22,11 @@ func TestDefaultTheme(t *testing.T) {
 	if th.Seq.Signal.A == 0 {
 		t.Error("expected non-zero alpha for signal color")
 	}
+	// Frame labels sit on the faint frame fill, so they're in the text
+	// colour, not the page's.
+	if th.Seq.FrameText != th.Foreground || th.Seq.LabelText != th.Foreground {
+		t.Errorf("frame text %v, label text %v, want the foreground %v", th.Seq.FrameText, th.Seq.LabelText, th.Foreground)
+	}
 }
 
 func TestZeroRoundingIsKept(t *testing.T) {

@@ -24,7 +24,10 @@ type Theme struct {
 	NoteText         color.NRGBA
 	FrameBkg         color.NRGBA
 	FrameBorder      color.NRGBA
-	FrameText        color.NRGBA
+	// FrameText is a frame's title and section labels; LabelText the
+	// keyword ("loop", "alt", …) in its corner tab.
+	FrameText color.NRGBA
+	LabelText color.NRGBA
 	// Rounding is the corner radius in dp. Zero means square corners.
 	Rounding float32
 }
@@ -46,6 +49,7 @@ func DefaultTheme() Theme {
 		FrameBkg:         HexColor("#efefef", 180),
 		FrameBorder:      HexColor("#444444", 255),
 		FrameText:        HexColor("#333333", 255),
+		LabelText:        HexColor("#333333", 255),
 		Rounding:         3,
 	}
 }
@@ -67,6 +71,7 @@ func DarkTheme() Theme {
 		FrameBkg:         HexColor("#242424", 180),
 		FrameBorder:      HexColor("#8a8a8a", 255),
 		FrameText:        HexColor("#dddddd", 255),
+		LabelText:        HexColor("#dddddd", 255),
 		Rounding:         3,
 	}
 }
@@ -88,6 +93,7 @@ func ForestTheme() Theme {
 		FrameBkg:         HexColor("#cde498", 160),
 		FrameBorder:      HexColor("#13540c", 255),
 		FrameText:        HexColor("#13540c", 255),
+		LabelText:        HexColor("#13540c", 255),
 		Rounding:         3,
 	}
 }
@@ -109,6 +115,7 @@ func NeutralTheme() Theme {
 		FrameBkg:         HexColor("#eeeeee", 160),
 		FrameBorder:      HexColor("#999999", 255),
 		FrameText:        HexColor("#333333", 255),
+		LabelText:        HexColor("#333333", 255),
 		Rounding:         3,
 	}
 }
@@ -155,6 +162,7 @@ func ResolveTheme(base Theme, themeName string, themeVars map[string]string) The
 	override(&t.FrameBkg, "labelBoxBkgColor")
 	override(&t.FrameBorder, "labelBoxBorderColor")
 	override(&t.FrameText, "loopTextColor")
+	override(&t.LabelText, "labelTextColor")
 
 	return t
 }

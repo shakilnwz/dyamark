@@ -179,8 +179,10 @@ func (t *Theme) deriveSeqTheme() {
 		NoteText:    t.Foreground,
 		FrameBkg:    withAlpha(t.LighterBackground, 90),
 		FrameBorder: withAlpha(t.Accent, 180),
-		FrameText:   t.Background,
-		Rounding:    float32(t.Rounding),
+		// The tab is the faint frame fill, so both read in the text colour.
+		FrameText: t.Foreground,
+		LabelText: t.Foreground,
+		Rounding:  float32(t.Rounding),
 	}
 }
 

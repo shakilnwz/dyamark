@@ -53,6 +53,14 @@ func TestResolveTheme(t *testing.T) {
 	if custom.Signal != (color.NRGBA{R: 255, G: 0, B: 0, A: 255}) {
 		t.Errorf("expected custom signal red, got %v", custom.Signal)
 	}
+	// The frame's tab keyword and its title have their own colours.
+	frames := ResolveTheme(base, "", map[string]string{
+		"labelTextColor": "#0000ff",
+		"loopTextColor":  "#00ff00",
+	})
+	if frames.LabelText != HexColor("#0000ff", 255) || frames.FrameText != HexColor("#00ff00", 255) {
+		t.Errorf("label text %v, loop text %v", frames.LabelText, frames.FrameText)
+	}
 }
 
 func TestParseColor(t *testing.T) {
