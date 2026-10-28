@@ -1,0 +1,49 @@
+# Linux packages for releases: .deb, .rpm and Arch's .pkg.tar.zst, made by
+# nfpm from build/dyamark (see .github/workflows/release.yml). bin/install
+# still builds the Arch package locally from PKGBUILD.
+name: dyamark
+arch: amd64
+platform: linux
+version: ${VERSION}
+release: 1
+maintainer: shakilnwz
+description: Fast Markdown viewer and editor with native Mermaid sequence diagrams
+homepage: https://github.com/shakilnwz/dyamark
+license: MIT
+
+contents:
+  - src: build/dyamark
+    dst: /usr/bin/dyamark
+    file_info:
+      mode: 0755
+  - src: pkgbuild/dyamark.desktop
+    dst: /usr/share/applications/dyamark.desktop
+  - src: pkgbuild/dyamark.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/dyamark.svg
+  - src: LICENSE
+    dst: /usr/share/licenses/dyamark/LICENSE
+  - src: fonts/LICENSE.liberation
+    dst: /usr/share/licenses/dyamark/LICENSE.liberation
+
+# Gio draws through Wayland and OpenGL ES only (see bin/env): the binary
+# links libwayland-client, -cursor and -egl, libxkbcommon and EGL, and
+# loads GLES at run time.
+overrides:
+  deb:
+    depends:
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-egl1
+      - libxkbcommon0
+      - libegl1
+      - libgles2
+  rpm:
+    depends:
+      - libwayland-client
+      - libwayland-cursor
+      - libwayland-egl
+      - libxkbcommon
+      - libglvnd-egl
+      - libglvnd-gles
+  archlinux:
+    depends: [wayland, libxkbcommon, libglvnd]

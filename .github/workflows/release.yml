@@ -1,0 +1,60 @@
+# Pushing a tag like v0.2.0 tests dyamark, builds it, and publishes a
+# GitHub release with an Arch .pkg.tar.zst, a .deb, an .rpm and a Windows
+# .exe.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Built against Ubuntu 24.04's glibc (2.39): fine on Arch, Fedora and
+    # Debian 13, too new for Debian 12 and Ubuntu 22.04.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Gio's build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgles2-mesa-dev
+
+      - name: Test
+        run: ./bin/test
+
+      - name: Build Linux binary
+        run: ./bin/build
+
+      - name: Build Linux packages
+        run: |
+          export VERSION="${GITHUB_REF_NAME#v}"
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          mkdir -p dist
+          for packager in archlinux deb rpm; do
+            "$(go env GOPATH)/bin/nfpm" package -f pkgbuild/nfpm.yaml -p "$packager" -t dist
+          done
+
+      - name: Build Windows binary
+        # Gio needs no cgo on Windows. -H windowsgui starts it without a
+        # console window.
+        run: |
+          source bin/env
+          GOOS=windows GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -H windowsgui -X gioui.org/app.ID=dyamark" \
+            -o "dist/dyamark-${GITHUB_REF_NAME#v}-windows-amd64.exe" .
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

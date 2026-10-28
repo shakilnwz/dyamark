@@ -4,3 +4,4 @@ build/
 pkgbuild/*.pkg.tar.zst
 pkgbuild/src/
 pkgbuild/pkg/
+dist/

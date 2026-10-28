@@ -25,6 +25,16 @@ build tags set in `bin/env`. Running `go` by hand needs the same tags, for
 example `GOFLAGS=-tags=novulkan,nox11 go test ./...`, or Gio's Vulkan backend
 asks for `vulkan/vulkan.h`.
 
+## Releases
+
+Pushing a tag like `v0.2.0` runs `.github/workflows/release.yml`: it runs
+the tests and publishes a GitHub release with an Arch `.pkg.tar.zst`, a
+`.deb` and an `.rpm` (made by nfpm from `pkgbuild/nfpm.yaml`), and a
+Windows `.exe`. The Linux packages need glibc 2.39 or newer. On Windows
+there's no file dialog yet (it uses xdg-desktop-portal), so files are
+opened from the command line or "Open with", and an untitled draft can't
+be saved.
+
 ## Status
 
 **Phase 0 (spike):** done.
