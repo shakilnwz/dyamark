@@ -106,7 +106,31 @@ func (c *CodeBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme
 	if c.Language != "" {
 		headerH = gtx.Metric.Sp(unit.Sp(18))
 	}
-	contentH := len(lines) * lineH
+
+	// A line too long for the block wraps, so lines are measured before
+	// the background is drawn. Wrapped rows are lineH apart, like lines,
+	// so a line takes its height rounded up to whole rows.
+	pxPerSp := gtx.Metric.PxPerSp
+	if pxPerSp <= 0 {
+		pxPerSp = 1
+	}
+	lineGtx := gtx
+	lineGtx.Constraints = layout.Constraints{Max: image.Pt(max(width-int(pad*2), 0), gtx.Constraints.Max.Y)}
+	lineCalls := make([]op.CallOp, len(lines))
+	lineHs := make([]int, len(lines))
+	contentH := 0
+	for i, line := range lines {
+		lbl := material.Label(th, fontSize, line)
+		lbl.Color = oTheme.Foreground
+		lbl.Font.Typeface = font.Typeface("monospace")
+		lbl.LineHeight = unit.Sp(float32(lineH) / pxPerSp)
+		lbl.LineHeightScale = 1
+		m := op.Record(gtx.Ops)
+		dims := lbl.Layout(lineGtx)
+		lineCalls[i] = m.Stop()
+		lineHs[i] = max((dims.Size.Y+lineH-1)/lineH, 1) * lineH
+		contentH += lineHs[i]
+	}
 	totalH := contentH + headerH + int(pad*2)
 
 	r := clip.Rect(image.Rectangle{Max: image.Pt(width, totalH)})
@@ -119,19 +143,16 @@ func (c *CodeBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme
 		langLbl.Color = oTheme.Accent
 		langLbl.Font.Weight = font.Bold
 		trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(pad, y))).Push(gtx.Ops)
-		langLbl.Layout(gtx)
+		langLbl.Layout(lineGtx)
 		trans.Pop()
 		y += float32(headerH)
 	}
 
-	for _, line := range lines {
-		lbl := material.Label(th, fontSize, line)
-		lbl.Color = oTheme.Foreground
-		lbl.Font.Typeface = font.Typeface("monospace")
+	for i, call := range lineCalls {
 		trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(pad, y))).Push(gtx.Ops)
-		lbl.Layout(gtx)
+		call.Add(gtx.Ops)
 		trans.Pop()
-		y += float32(lineH)
+		y += float32(lineHs[i])
 	}
 
 	return layout.Dimensions{Size: image.Pt(width, totalH+10)}
@@ -415,6 +436,9 @@ func (l *ListBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme
 func (l *ListBlock) layoutItems(gtx layout.Context, th *material.Theme, oTheme *Theme) int {
 	const textX = 32
 	totalH := 0
+	// Item text starts right of the bullet, so it has that much less room.
+	textGtx := gtx
+	textGtx.Constraints = layout.Constraints{Max: image.Pt(max(gtx.Constraints.Max.X-textX, 0), gtx.Constraints.Max.Y)}
 
 	for i, item := range l.Items {
 		bLbl := material.Label(th, unit.Sp(14), l.marker(i))
@@ -427,7 +451,7 @@ func (l *ListBlock) layoutItems(gtx layout.Context, th *material.Theme, oTheme *
 		tLbl := material.Label(th, unit.Sp(14), item.Text)
 		tLbl.Color = oTheme.Foreground
 		transT := op.Affine(f32.Affine2D{}.Offset(f32.Pt(textX, float32(totalH)))).Push(gtx.Ops)
-		dims := tLbl.Layout(gtx)
+		dims := tLbl.Layout(textGtx)
 		transT.Pop()
 
 		itemH := dims.Size.Y
@@ -437,7 +461,7 @@ func (l *ListBlock) layoutItems(gtx layout.Context, th *material.Theme, oTheme *
 		for _, nested := range item.Nested {
 			itemH += 6
 			trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(textX, float32(totalH+itemH)))).Push(gtx.Ops)
-			itemH += nested.layoutItems(gtx, th, oTheme) - 6
+			itemH += nested.layoutItems(textGtx, th, oTheme) - 6
 			trans.Pop()
 		}
 		totalH += itemH + 6
@@ -458,8 +482,11 @@ func (q *QuoteBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Them
 	lbl.Color = withAlpha(oTheme.Foreground, 210)
 	lbl.Font.Style = font.Italic
 
-	trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(pad+8, 4))).Push(gtx.Ops)
-	dims := lbl.Layout(gtx)
+	textX := int(pad + 8)
+	textGtx := gtx
+	textGtx.Constraints = layout.Constraints{Max: image.Pt(max(width-textX, 0), gtx.Constraints.Max.Y)}
+	trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(textX), 4))).Push(gtx.Ops)
+	dims := lbl.Layout(textGtx)
 	trans.Pop()
 
 	totalH := dims.Size.Y + 12
@@ -493,6 +520,12 @@ type TableBlock struct {
 	Rows    [][]string
 }
 
+// tableRow is a laid-out table row: its recorded cells and its height.
+type tableRow struct {
+	cells []op.CallOp
+	h     float32
+}
+
 func (t *TableBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
 	if len(t.Headers) == 0 && len(t.Rows) == 0 {
 		return layout.Dimensions{}
@@ -510,16 +543,52 @@ func (t *TableBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Them
 	colW := float32(totalW) / float32(numCols)
 	cellPadX := float32(10.0)
 	cellPadY := float32(8.0)
-	rowH := float32(gtx.Metric.Sp(unit.Sp(13))) * 2.2
-	if rowH < 32 {
-		rowH = 32
+	minRowH := float32(gtx.Metric.Sp(unit.Sp(13))) * 2.2
+	if minRowH < 32 {
+		minRowH = 32
 	}
 
-	numRows := len(t.Rows)
-	if len(t.Headers) > 0 {
-		numRows++
+	// Cell text wraps at its column, so the rows are measured before
+	// anything is drawn; a row is as tall as its tallest cell.
+	cellGtx := gtx
+	cellGtx.Constraints = layout.Constraints{Max: image.Pt(max(int(colW-2*cellPadX), 0), gtx.Constraints.Max.Y)}
+	measure := func(texts []string, bold bool) tableRow {
+		r := tableRow{h: minRowH}
+		for c, txt := range texts {
+			if c >= numCols {
+				break
+			}
+			lbl := material.Label(th, unit.Sp(13), txt)
+			lbl.Color = oTheme.Foreground
+			if bold {
+				lbl.Font.Weight = font.Bold
+			}
+			m := op.Record(gtx.Ops)
+			dims := lbl.Layout(cellGtx)
+			r.cells = append(r.cells, m.Stop())
+			r.h = max(r.h, float32(dims.Size.Y)+2*cellPadY)
+		}
+		return r
 	}
-	tableH := float32(numRows) * rowH
+	drawCells := func(r tableRow, y float32) {
+		for c, call := range r.cells {
+			trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(c)*colW+cellPadX, y+cellPadY))).Push(gtx.Ops)
+			call.Add(gtx.Ops)
+			trans.Pop()
+		}
+	}
+
+	var header tableRow
+	tableH := float32(0)
+	if len(t.Headers) > 0 {
+		header = measure(t.Headers, true)
+		tableH += header.h
+	}
+	rows := make([]tableRow, len(t.Rows))
+	for i, row := range t.Rows {
+		rows[i] = measure(row, false)
+		tableH += rows[i].h
+	}
 
 	tableRect := clip.Rect(image.Rectangle{Max: image.Pt(totalW, int(tableH))})
 	paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 60), tableRect.Op())
@@ -528,19 +597,11 @@ func (t *TableBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Them
 	curY := float32(0.0)
 
 	if len(t.Headers) > 0 {
-		hdrRect := clip.Rect(image.Rectangle{Max: image.Pt(totalW, int(rowH))})
+		hdrRect := clip.Rect(image.Rectangle{Max: image.Pt(totalW, int(header.h))})
 		paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 200), hdrRect.Op())
+		drawCells(header, curY)
 
-		for c, hText := range t.Headers {
-			lbl := material.Label(th, unit.Sp(13), hText)
-			lbl.Color = oTheme.Foreground
-			lbl.Font.Weight = font.Bold
-			trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(c)*colW+cellPadX, curY+cellPadY))).Push(gtx.Ops)
-			lbl.Layout(gtx)
-			trans.Pop()
-		}
-
-		curY += rowH
+		curY += header.h
 		var div clip.Path
 		div.Begin(gtx.Ops)
 		div.MoveTo(f32.Pt(0, curY))
@@ -548,27 +609,17 @@ func (t *TableBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Them
 		paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 60), clip.Stroke{Path: div.End(), Width: 1.5}.Op())
 	}
 
-	for rIdx, row := range t.Rows {
+	for rIdx, row := range rows {
 		if rIdx%2 == 1 {
 			zRect := clip.Rect(image.Rectangle{
 				Min: image.Pt(0, int(curY)),
-				Max: image.Pt(totalW, int(curY+rowH)),
+				Max: image.Pt(totalW, int(curY+row.h)),
 			})
 			paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 100), zRect.Op())
 		}
+		drawCells(row, curY)
 
-		for c, cellText := range row {
-			if c >= numCols {
-				break
-			}
-			lbl := material.Label(th, unit.Sp(13), cellText)
-			lbl.Color = oTheme.Foreground
-			trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(c)*colW+cellPadX, curY+cellPadY))).Push(gtx.Ops)
-			lbl.Layout(gtx)
-			trans.Pop()
-		}
-
-		curY += rowH
+		curY += row.h
 		if rIdx < len(t.Rows)-1 {
 			var div clip.Path
 			div.Begin(gtx.Ops)
