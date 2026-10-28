@@ -1,6 +1,11 @@
 # Maintainer: shakilnwz
 pkgname=dyamark
-pkgver=0.1.0
+# The version comes from the checkout: v1.1.0 two commits on is
+# 1.1.0.r2.g54b4e02. It's worked out here rather than in pkgver(), which
+# makepkg would write back into this file on every build.
+pkgver=$(git -C "$startdir/.." describe --long --tags --abbrev=7 2>/dev/null |
+  sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g')
+pkgver=${pkgver:-0}
 pkgrel=1
 pkgdesc="Fast Markdown viewer and editor with native Mermaid sequence diagrams"
 arch=('x86_64')
@@ -9,7 +14,7 @@ license=('MIT')
 # Gio is built for Wayland + OpenGL ES only (see bin/env): EGL and GLES come
 # from libglvnd, the driver from mesa or the vendor's package.
 depends=('wayland' 'libxkbcommon' 'libglvnd')
-makedepends=('go')
+makedepends=('go' 'git')
 source=()
 
 build() {
