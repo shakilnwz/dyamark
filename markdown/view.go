@@ -19,6 +19,10 @@ type View struct {
 	List         layout.List
 	FocusedIndex int
 	TextScale    float32 // 1.0 default
+	// NoPlainKeys turns off the shortcuts typed without Ctrl (Tab, Enter
+	// and R) while another widget, the editor, takes the typing: a typed
+	// letter arrives as both text and a key press.
+	NoPlainKeys bool
 
 	OnOpenViewer    func(block *SequenceBlock)
 	OnRenderMermaid func(block *MermaidOtherBlock)
@@ -147,26 +151,31 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 		return layout.Dimensions{}
 	}
 
-	for {
-		ev, ok := gtx.Event(
-			pointer.Filter{
-				Target:  v,
-				Kinds:   pointer.Scroll,
-				ScrollX: pointer.ScrollRange{Min: -1000000, Max: 1000000},
-				ScrollY: pointer.ScrollRange{Min: -1000000, Max: 1000000},
-			},
+	filters := []event.Filter{
+		pointer.Filter{
+			Target:  v,
+			Kinds:   pointer.Scroll,
+			ScrollX: pointer.ScrollRange{Min: -1000000, Max: 1000000},
+			ScrollY: pointer.ScrollRange{Min: -1000000, Max: 1000000},
+		},
+		key.Filter{Required: key.ModCtrl, Name: "="},
+		// `+` and `_` are usually typed with Shift, which Gio reports.
+		key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "+"},
+		key.Filter{Required: key.ModCtrl, Name: "-"},
+		key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "_"},
+		key.Filter{Required: key.ModCtrl, Name: "0"},
+	}
+	if !v.NoPlainKeys {
+		filters = append(filters,
 			key.Filter{Name: key.NameTab},
 			key.Filter{Name: key.NameTab, Required: key.ModShift},
 			key.Filter{Name: key.NameReturn},
 			key.Filter{Name: key.NameEnter},
 			key.Filter{Name: "R"},
-			key.Filter{Required: key.ModCtrl, Name: "="},
-			// `+` and `_` are usually typed with Shift, which Gio reports.
-			key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "+"},
-			key.Filter{Required: key.ModCtrl, Name: "-"},
-			key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "_"},
-			key.Filter{Required: key.ModCtrl, Name: "0"},
 		)
+	}
+	for {
+		ev, ok := gtx.Event(filters...)
 		if !ok {
 			break
 		}

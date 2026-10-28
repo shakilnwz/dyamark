@@ -55,9 +55,13 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 		cache = NewDiagramCache()
 	}
 
-	// A raw .mmd file holding a sequence diagram is drawn as one.
+	// A raw .mmd file holding a sequence diagram is drawn as one. Its
+	// lines are numbered as in the file, not in the fenced copy.
+	lineShift := 0
 	trimmed := strings.TrimSpace(string(source))
 	if isSequenceSource(trimmed) {
+		lead := strings.Count(string(source[:strings.Index(string(source), trimmed)]), "\n")
+		lineShift = lead - 1
 		source = []byte("```mermaid\n" + trimmed + "\n```\n")
 	}
 
@@ -87,7 +91,7 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 			code := extractCodeLines(n.Lines(), source)
 			startLine := 1
 			if n.Lines().Len() > 0 {
-				startLine = lineIdx.LineNumber(n.Lines().At(0).Start)
+				startLine = lineIdx.LineNumber(n.Lines().At(0).Start) + lineShift
 			}
 
 			if isSequenceDiagram(lang, code) {
@@ -111,6 +115,9 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 					Source:      code,
 					StartLine:   startLine,
 					Cache:       cache,
+					// Rendered before this parse, say before a save:
+					// still rendered.
+					Rendered: cache.Rendered(code),
 				})
 			} else {
 				blocks = append(blocks, &CodeBlock{Language: lang, Code: code})

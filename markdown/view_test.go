@@ -147,3 +147,34 @@ func TestRenderKey(t *testing.T) {
 		t.Errorf("R rendered %v, want the block under the pointer", rendered)
 	}
 }
+
+// While the editor takes the typing, letters typed into it don't also
+// fire the view's plain shortcuts; Ctrl shortcuts still work.
+func TestNoPlainKeys(t *testing.T) {
+	doc := Parse([]byte(fence+"mermaid\nflowchart TD\nA-->B\n"+fence+"\n"), nil)
+	v := NewView(doc)
+	v.NoPlainKeys = true
+	rendered := false
+	v.OnRenderMermaid = func(*MermaidOtherBlock) { rendered = true }
+	r, frame := viewFrames(t, v)
+	frame()
+
+	r.Queue(key.Event{Name: "R", State: key.Press})
+	frame()
+	if rendered {
+		t.Error("R typed into the editor rendered a diagram")
+	}
+	r.Queue(key.Event{Name: "=", Modifiers: key.ModCtrl, State: key.Press})
+	frame()
+	if v.TextScale <= 1 {
+		t.Error("Ctrl+= stopped zooming the text")
+	}
+
+	v.NoPlainKeys = false
+	frame()
+	r.Queue(key.Event{Name: "R", State: key.Press})
+	frame()
+	if !rendered {
+		t.Error("R didn't render once the editor let go")
+	}
+}

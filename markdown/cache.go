@@ -28,6 +28,9 @@ type CachedDiagram struct {
 	AST     *parse.Diagram
 	Diagram *layoutPkg.Diagram
 	Error   error
+
+	// used is set when the diagram is asked for, and cleared by Prune.
+	used bool
 }
 
 // NewDiagramCache creates an empty diagram cache.
@@ -46,6 +49,7 @@ func (c *DiagramCache) GetOrLayout(source string, blockIndex int) (*parse.Diagra
 
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(source)))
 	if cached, ok := c.diagrams[hash]; ok {
+		cached.used = true
 		lastGood := c.lastGood[blockIndex]
 		if cached.Error == nil {
 			c.lastGood[blockIndex] = cached.Diagram
@@ -56,19 +60,34 @@ func (c *DiagramCache) GetOrLayout(source string, blockIndex int) (*parse.Diagra
 
 	ast, err := parse.Parse(source)
 	if err != nil {
-		c.diagrams[hash] = &CachedDiagram{Error: err}
+		c.diagrams[hash] = &CachedDiagram{Error: err, used: true}
 		return nil, nil, err, c.lastGood[blockIndex]
 	}
 
 	diag, err := layoutPkg.Layout(ast, layoutPkg.Default())
 	if err != nil {
-		c.diagrams[hash] = &CachedDiagram{AST: ast, Error: err}
+		c.diagrams[hash] = &CachedDiagram{AST: ast, Error: err, used: true}
 		return ast, nil, err, c.lastGood[blockIndex]
 	}
 
-	c.diagrams[hash] = &CachedDiagram{AST: ast, Diagram: diag}
+	c.diagrams[hash] = &CachedDiagram{AST: ast, Diagram: diag, used: true}
 	c.lastGood[blockIndex] = diag
 	return ast, diag, nil, diag
+}
+
+// Prune forgets the diagrams not asked for since the last Prune. Called
+// after each parse of the document being edited, it keeps only the
+// current diagrams, not every version typed on the way.
+func (c *DiagramCache) Prune() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for hash, d := range c.diagrams {
+		if !d.used {
+			delete(c.diagrams, hash)
+			continue
+		}
+		d.used = false
+	}
 }
 
 // ClearLastGood forgets the last good layout of every diagram position. Call
@@ -77,6 +96,15 @@ func (c *DiagramCache) ClearLastGood() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	clear(c.lastGood)
+}
+
+// Rendered returns the image mmdc made of source earlier in this run, or
+// nil. It only looks in memory, so it's cheap enough for every parse.
+func (c *DiagramCache) Rendered(source string) image.Image {
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(source)))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pngCache[hash]
 }
 
 // RenderMmdc renders a non-sequence Mermaid diagram with mmdc, caching the

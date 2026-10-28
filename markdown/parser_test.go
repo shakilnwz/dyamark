@@ -71,6 +71,16 @@ func TestRawSequenceSource(t *testing.T) {
 		}
 	}
 
+	// Its diagram starts on the file's first line, after blank lines.
+	for src, want := range map[string]int{
+		"sequenceDiagram\nA->>B: hi\n":     1,
+		"\n\nsequenceDiagram\nA->>B: hi\n": 3,
+	} {
+		if got := Parse([]byte(src), nil).Sequences[0].StartLine; got != want {
+			t.Errorf("%q starts on line %d, want %d", src, got, want)
+		}
+	}
+
 	// A Markdown file with YAML front matter stays Markdown.
 	doc := Parse([]byte("---\ntitle: Notes\n---\n\n# Notes\n"), nil)
 	if len(doc.Sequences) != 0 {

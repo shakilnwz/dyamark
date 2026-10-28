@@ -1,6 +1,8 @@
 package markdown
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"image"
 	"testing"
 
@@ -223,5 +225,37 @@ func TestTextZoom(t *testing.T) {
 	view.ZoomTextOut()
 	if view.TextScale >= 1.0 {
 		t.Errorf("expected text scale < 1.0 after zoom out, got %f", view.TextScale)
+	}
+}
+
+// Prune keeps the diagrams parsed since the last Prune and drops the rest,
+// the versions typed on the way.
+func TestDiagramCachePrune(t *testing.T) {
+	c := NewDiagramCache()
+	c.GetOrLayout("sequenceDiagram\nA->>B: h", 0)
+	c.GetOrLayout("sequenceDiagram\nA->>B: hi", 0)
+	c.Prune()
+	c.GetOrLayout("sequenceDiagram\nA->>B: hi", 0)
+	c.Prune()
+	if len(c.diagrams) != 1 {
+		t.Fatalf("%d diagrams cached, want 1", len(c.diagrams))
+	}
+	ast, _, _, _ := c.GetOrLayout("sequenceDiagram\nA->>B: hi", 0)
+	ast2, _, _, _ := c.GetOrLayout("sequenceDiagram\nA->>B: hi", 0)
+	if ast != ast2 {
+		t.Error("the kept diagram was parsed again")
+	}
+}
+
+// A diagram rendered with mmdc stays rendered when the document is parsed
+// again, after a save or while typing elsewhere.
+func TestRenderedSurvivesParse(t *testing.T) {
+	c := NewDiagramCache()
+	src := "flowchart TD\nA-->B\n"
+	img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	c.pngCache[fmt.Sprintf("%x", sha256.Sum256([]byte(src)))] = img
+	doc := Parse([]byte("# T\n\n```mermaid\n"+src+"```\n"), c)
+	if got := doc.Blocks[1].(*MermaidOtherBlock).Rendered; got != image.Image(img) {
+		t.Errorf("render lost: %v", got)
 	}
 }
