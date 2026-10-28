@@ -14,7 +14,6 @@ import (
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/event"
-	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -155,25 +154,10 @@ type SequenceBlock struct {
 func (s *SequenceBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
 	width := gtx.Constraints.Max.X
 
+	// Enter is handled by the View, which knows which diagram is focused.
 	if s.Click.Clicked(gtx) {
 		if s.OnOpenViewer != nil {
 			s.OnOpenViewer(s)
-		}
-	}
-
-	for {
-		ev, ok := gtx.Event(
-			key.Filter{Focus: s},
-			key.Filter{Name: key.NameEnter},
-			key.Filter{Name: key.NameReturn},
-		)
-		if !ok {
-			break
-		}
-		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
-			if s.OnOpenViewer != nil {
-				s.OnOpenViewer(s)
-			}
 		}
 	}
 
@@ -316,38 +300,49 @@ type MermaidOtherBlock struct {
 	Rendered    image.Image
 	RenderError string
 	OnRender    func(b *MermaidOtherBlock)
+
+	// hovered is set while the pointer is over the block, so R renders it.
+	hovered bool
 }
 
 func (m *MermaidOtherBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
-	width := gtx.Constraints.Max.X
-
+	// R is handled by the View, which picks the block to render.
 	for {
-		ev, ok := gtx.Event(
-			pointer.Filter{
-				Target: m,
-				Kinds:  pointer.Press,
-			},
-			key.Filter{Focus: m},
-			key.Filter{Name: "R"},
-		)
+		ev, ok := gtx.Event(pointer.Filter{
+			Target: m,
+			Kinds:  pointer.Press | pointer.Enter | pointer.Leave | pointer.Cancel,
+		})
 		if !ok {
 			break
 		}
-		switch e := ev.(type) {
-		case pointer.Event:
-			if e.Kind == pointer.Press && m.OnRender != nil {
+		e, ok := ev.(pointer.Event)
+		if !ok {
+			continue
+		}
+		switch e.Kind {
+		case pointer.Press:
+			if m.OnRender != nil {
 				m.OnRender(m)
 			}
-		case key.Event:
-			if e.State == key.Press && m.OnRender != nil {
-				m.OnRender(m)
-			}
+		case pointer.Enter:
+			m.hovered = true
+		case pointer.Leave, pointer.Cancel:
+			m.hovered = false
 		}
 	}
 
-	area := clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Push(gtx.Ops)
+	dims := m.layoutContent(gtx, th, oTheme)
+
+	// The list gives its children unbounded height, so the hit area is the
+	// block's own size, not the constraints.
+	area := clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops)
 	event.Op(gtx.Ops, m)
 	area.Pop()
+	return dims
+}
+
+func (m *MermaidOtherBlock) layoutContent(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
+	width := gtx.Constraints.Max.X
 
 	if m.Rendered != nil {
 		imgSz := m.Rendered.Bounds().Size()
