@@ -390,29 +390,49 @@ func (m *MermaidOtherBlock) Layout(gtx layout.Context, th *material.Theme, oThem
 // ListBlock represents ordered or unordered lists.
 type ListBlock struct {
 	Ordered bool
-	Items   []string
+	// Start is the number of the first item of an ordered list.
+	Start int
+	Items []ListItem
+}
+
+// ListItem is one list entry: its text, with paragraphs separated by a
+// blank line, and the lists nested under it.
+type ListItem struct {
+	Text   string
+	Nested []*ListBlock
+}
+
+// marker returns the bullet or number in front of item i.
+func (l *ListBlock) marker(i int) string {
+	if l.Ordered {
+		return fmt.Sprintf("%d. ", l.Start+i)
+	}
+	return "• "
 }
 
 func (l *ListBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
 	width := gtx.Constraints.Max.X
+	totalH := l.layoutItems(gtx, th, oTheme)
+	return layout.Dimensions{Size: image.Pt(width, totalH+6)}
+}
+
+// layoutItems draws the items, with nested lists indented under their
+// item, and returns the height they take.
+func (l *ListBlock) layoutItems(gtx layout.Context, th *material.Theme, oTheme *Theme) int {
+	const textX = 32
 	totalH := 0
 
 	for i, item := range l.Items {
-		bullet := "• "
-		if l.Ordered {
-			bullet = fmt.Sprintf("%d. ", i+1)
-		}
-
-		bLbl := material.Label(th, unit.Sp(14), bullet)
+		bLbl := material.Label(th, unit.Sp(14), l.marker(i))
 		bLbl.Color = oTheme.Accent
 		bLbl.Font.Weight = font.Bold
 		transB := op.Affine(f32.Affine2D{}.Offset(f32.Pt(12, float32(totalH)))).Push(gtx.Ops)
 		bLbl.Layout(gtx)
 		transB.Pop()
 
-		tLbl := material.Label(th, unit.Sp(14), item)
+		tLbl := material.Label(th, unit.Sp(14), item.Text)
 		tLbl.Color = oTheme.Foreground
-		transT := op.Affine(f32.Affine2D{}.Offset(f32.Pt(32, float32(totalH)))).Push(gtx.Ops)
+		transT := op.Affine(f32.Affine2D{}.Offset(f32.Pt(textX, float32(totalH)))).Push(gtx.Ops)
 		dims := tLbl.Layout(gtx)
 		transT.Pop()
 
@@ -420,10 +440,15 @@ func (l *ListBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme
 		if itemH < 20 {
 			itemH = 20
 		}
+		for _, nested := range item.Nested {
+			itemH += 6
+			trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(textX, float32(totalH+itemH)))).Push(gtx.Ops)
+			itemH += nested.layoutItems(gtx, th, oTheme) - 6
+			trans.Pop()
+		}
 		totalH += itemH + 6
 	}
-
-	return layout.Dimensions{Size: image.Pt(width, totalH+6)}
+	return totalH
 }
 
 // QuoteBlock represents a blockquote.
