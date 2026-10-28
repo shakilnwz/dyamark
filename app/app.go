@@ -95,6 +95,12 @@ type App struct {
 	saved, parsed string
 	// dirty is set while the editor has edits that aren't saved.
 	dirty bool
+	// saveErr is why the last save failed, until one succeeds.
+	saveErr string
+	// followDoc and followBlock are the document and block the split view
+	// last showed the caret in.
+	followDoc   *markdown.ParsedDocument
+	followBlock int
 	// parseAt and saveAt are when the view is laid out again and the file
 	// saved after typing stops; zero when nothing is waiting.
 	parseAt, saveAt time.Time
@@ -269,6 +275,8 @@ func New(opts Options) (*App, error) {
 			a.window.Invalidate()
 		}
 	}
+
+	mdView.OnOpenLink = a.openLink
 
 	mdView.OnRenderMermaid = func(block *markdown.MermaidOtherBlock) {
 		go func() {
@@ -544,6 +552,12 @@ func (a *App) frame(gtx layout.Context) {
 	if a.prompt != nil {
 		under = gtx.Disabled()
 	}
+	// The status line takes the bottom of the window.
+	statusH := 0
+	if a.showStatus() {
+		statusH = gtx.Dp(statusHeight)
+		under.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-statusH, 0)))
+	}
 	mdTh := &markdown.Theme{
 		Background:        theme.Background,
 		Foreground:        theme.Foreground,
@@ -560,15 +574,24 @@ func (a *App) frame(gtx layout.Context) {
 	case ModeSplit:
 		a.layoutSplit(under, theme, mdTh)
 	default:
-		a.mdView.NoPlainKeys = gtx.Focused(&a.editor)
+		a.mdView.NoPlainKeys = false
 		a.mdView.Layout(under, a.mTheme, mdTh)
 	}
 
+	if statusH > 0 {
+		bar := gtx
+		bar.Constraints = layout.Exact(image.Pt(size.X, statusH))
+		off := op.Offset(image.Pt(0, size.Y-statusH)).Push(gtx.Ops)
+		a.layoutStatus(bar, theme)
+		off.Pop()
+	}
 	if a.prompt != nil {
 		a.layoutPrompt(gtx, theme)
 	}
 	if a.notice != "" {
-		a.layoutNotice(gtx, theme)
+		above := gtx
+		above.Constraints = layout.Exact(image.Pt(size.X, max(size.Y-statusH, 0)))
+		a.layoutNotice(above, theme)
 	}
 	// Wake up for the parse, save or notice waiting on typing to stop.
 	if next := a.tick(gtx.Now); !next.IsZero() {
@@ -604,6 +627,15 @@ func (a *App) layoutSplit(gtx layout.Context, theme *Theme, mdTh *markdown.Theme
 	area := clip.Rect(image.Rectangle{Max: right.Constraints.Max}).Push(gtx.Ops)
 	event.Op(gtx.Ops, &a.mdView)
 	a.mdView.NoPlainKeys = gtx.Focused(&a.editor)
+	// The view follows the caret to another block, and through edits,
+	// while the editor has the keyboard.
+	line, _ := a.editor.CaretPos()
+	if b := a.mdView.Doc.BlockAt(line + 1); b != a.followBlock || a.mdView.Doc != a.followDoc {
+		a.followDoc, a.followBlock = a.mdView.Doc, b
+		if b >= 0 && gtx.Focused(&a.editor) {
+			a.mdView.ShowBlock(b)
+		}
+	}
 	a.mdView.Layout(right, a.mTheme, mdTh)
 	area.Pop()
 	off.Pop()

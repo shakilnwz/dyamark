@@ -129,3 +129,19 @@ func TestMermaidImageOpReused(t *testing.T) {
 		t.Errorf("%d bytes allocated in 5 frames: the image is copied every frame", n)
 	}
 }
+
+// Line breaks in styled text start new lines: a hard break in a
+// paragraph, and a list item's second paragraph after a blank line.
+func TestSpansBreakLines(t *testing.T) {
+	height := func(src string) int {
+		return blockHeight(t, Parse([]byte(src), nil).Blocks[0], 600)
+	}
+	one, two := height("one **two**\n"), height("one  \n**two**\n")
+	if two < one*3/2 {
+		t.Errorf("hard break: %d tall, one line is %d", two, one)
+	}
+	item, items := height("- one\n"), height("- one\n\n  two\n")
+	if items < item*2 {
+		t.Errorf("two paragraphs: %d tall, one is %d", items, item)
+	}
+}

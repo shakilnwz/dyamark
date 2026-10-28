@@ -1,7 +1,9 @@
 package markdown
 
 import (
+	"fmt"
 	"image"
+	"strings"
 	"testing"
 
 	"dyamark/fonts"
@@ -176,5 +178,122 @@ func TestNoPlainKeys(t *testing.T) {
 	frame()
 	if !rendered {
 		t.Error("R didn't render once the editor let go")
+	}
+}
+
+// The reading keys scroll the view: arrows by a line, Page Down and Space
+// by a screen, Home and End to either end, which the list doesn't pass.
+func TestReadingKeysScroll(t *testing.T) {
+	var src strings.Builder
+	for i := range 60 {
+		fmt.Fprintf(&src, "Paragraph %d.\n\n", i)
+	}
+	v := NewView(Parse([]byte(src.String()), nil))
+	r, frame := viewFrames(t, v)
+	frame()
+	press := func(name key.Name, mods key.Modifiers) layout.Position {
+		t.Helper()
+		r.Queue(key.Event{Name: name, Modifiers: mods, State: key.Press})
+		frame()
+		frame()
+		return v.List.Position
+	}
+	top := func(p layout.Position) int { return p.First*1000 + p.Offset }
+
+	down := press(key.NameDownArrow, 0)
+	if top(down) <= 0 {
+		t.Fatalf("Down didn't scroll: %+v", down)
+	}
+	page := press(key.NamePageDown, 0)
+	if page.First < 10 {
+		t.Errorf("Page Down moved only to block %d of an 800 px screen", page.First)
+	}
+	space := press(key.NameSpace, 0)
+	if top(space) <= top(page) {
+		t.Errorf("Space didn't scroll on: %+v after %+v", space, page)
+	}
+	if back := press(key.NameSpace, key.ModShift); top(back) >= top(space) {
+		t.Errorf("Shift+Space didn't scroll back: %+v", back)
+	}
+	if up := press(key.NameUpArrow, 0); top(up) >= top(space) {
+		t.Errorf("Up didn't scroll back: %+v", up)
+	}
+
+	end := press(key.NameEnd, 0)
+	if end.First+end.Count != len(v.Doc.Blocks) || end.OffsetLast != 0 {
+		t.Errorf("End: %+v, want the last block's bottom at the bottom", end)
+	}
+	if again := press(key.NamePageDown, 0); again.First != end.First || again.Offset != end.Offset {
+		t.Errorf("Page Down at the end moved on: %+v", again)
+	}
+	if home := press(key.NameHome, 0); home.First != 0 || home.Offset != 0 {
+		t.Errorf("Home: %+v", home)
+	}
+}
+
+// ShowBlock scrolls as little as it takes: a block far off goes to the
+// top, one cut off at the bottom just comes up into view, and one taller
+// than the view keeps its top in view.
+func TestShowBlock(t *testing.T) {
+	var src strings.Builder
+	for i := range 60 {
+		fmt.Fprintf(&src, "Paragraph %d.\n\n", i)
+	}
+	src.WriteString("```\n" + strings.Repeat("code\n", 100) + "```\n")
+	v := NewView(Parse([]byte(src.String()), nil))
+	_, frame := viewFrames(t, v)
+	frame()
+
+	v.ShowBlock(30)
+	frame()
+	if p := v.List.Position; p.First != 30 || p.Offset != 0 {
+		t.Fatalf("far block: first %d offset %d", p.First, p.Offset)
+	}
+
+	below := v.List.Position.First + v.List.Position.Count
+	v.ShowBlock(below)
+	frame()
+	p := v.List.Position
+	if p.First+p.Count-1 != below || p.OffsetLast < 0 {
+		t.Errorf("block below: first %d count %d offset last %d", p.First, p.Count, p.OffsetLast)
+	}
+	if p.First > 33 {
+		t.Errorf("block below scrolled %d blocks", p.First-30)
+	}
+
+	v.ShowBlock(29)
+	frame()
+	if p := v.List.Position; p.First != 29 || p.Offset != 0 {
+		t.Errorf("block above: first %d offset %d", p.First, p.Offset)
+	}
+
+	v.List.Position = layout.Position{First: 45}
+	frame()
+	v.ShowBlock(60)
+	frame()
+	if p := v.List.Position; p.First != 60 || p.Offset != 0 {
+		t.Errorf("tall block: first %d offset %d", p.First, p.Offset)
+	}
+}
+
+// Clicking a link calls OnOpenLink with its URL; clicking plain text
+// beside it doesn't.
+func TestLinkClick(t *testing.T) {
+	v := NewView(Parse([]byte("[here](https://x.org) and plain text after it\n"), nil))
+	var opened []string
+	v.OnOpenLink = func(url string) { opened = append(opened, url) }
+	r, frame := viewFrames(t, v)
+	frame()
+	// The column starts at x 70 in the 1000 px view.
+	click := func(x float32) {
+		at := f32.Pt(x, 10)
+		r.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: at})
+		r.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: at})
+		frame()
+	}
+	click(80)
+	click(300)
+	if len(opened) != 1 || opened[0] != "https://x.org" {
+		t.Errorf("opened %q", opened)
 	}
 }

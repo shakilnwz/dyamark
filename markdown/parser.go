@@ -20,6 +20,20 @@ var gm = goldmark.New(goldmark.WithExtensions(extension.GFM))
 type ParsedDocument struct {
 	Blocks    []Block
 	Sequences []*SequenceBlock
+	// Lines holds the 1-based source line each block starts on.
+	Lines []int
+	// Links holds the links in the text, each once.
+	Links []*Link
+}
+
+// BlockAt returns the index of the block holding line, 1-based: the last
+// block starting on or before it. It's -1 when there are no blocks.
+func (d *ParsedDocument) BlockAt(line int) int {
+	if len(d.Blocks) == 0 {
+		return -1
+	}
+	i := sort.Search(len(d.Lines), func(i int) bool { return d.Lines[i] > line })
+	return max(i-1, 0)
 }
 
 // LineIndex maps byte offsets to 1-based line numbers.
@@ -70,20 +84,20 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 
 	var blocks []Block
 	var sequences []*SequenceBlock
+	var lines []int
 	seqIndex := 0
 
 	for node := doc.FirstChild(); node != nil; node = node.NextSibling() {
+		count := len(blocks)
 		switch n := node.(type) {
 		case *ast.Heading:
-			txt := strings.TrimSpace(extractNodeText(n, source))
-			if txt != "" {
-				blocks = append(blocks, &HeadingBlock{Level: n.Level, Text: txt})
+			if spans := trimSpans(inlineSpans(n, source)); len(spans) > 0 {
+				blocks = append(blocks, &HeadingBlock{Level: n.Level, Text: plainText(spans), Spans: spans})
 			}
 
 		case *ast.Paragraph:
-			txt := strings.TrimSpace(extractNodeText(n, source))
-			if txt != "" {
-				blocks = append(blocks, &ParagraphBlock{Text: txt})
+			if spans := trimSpans(inlineSpans(n, source)); len(spans) > 0 {
+				blocks = append(blocks, &ParagraphBlock{Text: plainText(spans), Spans: spans})
 			}
 
 		case *ast.FencedCodeBlock:
@@ -139,12 +153,58 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 		case *east.Table:
 			blocks = append(blocks, extractTable(n, source))
 		}
+		if len(blocks) > count {
+			line := nodeLine(node, lineIdx)
+			if line > 0 {
+				line = max(line+lineShift, 1)
+			}
+			lines = append(lines, line)
+		}
+	}
+	// A rule has no text to place it: it starts where the next block does,
+	// so the lines before it stay with the block above.
+	next := len(lineIdx.lineStarts)
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i] == 0 {
+			lines[i] = next
+		}
+		next = lines[i]
 	}
 
-	return &ParsedDocument{
+	d := &ParsedDocument{
 		Blocks:    blocks,
 		Sequences: sequences,
+		Lines:     lines,
 	}
+	d.Links = d.links()
+	return d
+}
+
+// nodeLine returns the 1-based line n starts on, from its own text or its
+// first descendant's, or 0 when it holds none.
+func nodeLine(n ast.Node, idx *LineIndex) int {
+	switch n := n.(type) {
+	case *ast.FencedCodeBlock:
+		// The fence is the line before the code.
+		if n.Info != nil {
+			return idx.LineNumber(n.Info.Segment.Start)
+		}
+		if n.Lines().Len() > 0 {
+			return idx.LineNumber(n.Lines().At(0).Start) - 1
+		}
+		return 0
+	case *ast.Text:
+		return idx.LineNumber(n.Segment.Start)
+	}
+	if n.Type() == ast.TypeBlock && n.Lines().Len() > 0 {
+		return idx.LineNumber(n.Lines().At(0).Start)
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if line := nodeLine(c, idx); line > 0 {
+			return line
+		}
+	}
+	return 0
 }
 
 func isSequenceDiagram(lang, code string) bool {
@@ -218,47 +278,6 @@ func extractCodeLines(lines *text.Segments, source []byte) string {
 	return buf.String()
 }
 
-// extractNodeText returns the plain text of n's inline children.
-func extractNodeText(n ast.Node, source []byte) string {
-	var buf strings.Builder
-	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
-		switch c := child.(type) {
-		case *ast.Text:
-			v := c.Segment.Value(source)
-			if c.IsRaw() {
-				// Code span text: kept as written, its line ends as spaces.
-				buf.WriteString(strings.ReplaceAll(string(v), "\n", " "))
-			} else {
-				buf.WriteString(resolveText(v))
-			}
-			if c.HardLineBreak() {
-				buf.WriteByte('\n')
-			} else if c.SoftLineBreak() {
-				buf.WriteByte(' ')
-			}
-		case *ast.String:
-			buf.Write(c.Value)
-		case *ast.AutoLink:
-			buf.Write(c.Label(source))
-		case *east.TaskCheckBox:
-			// □ and ■ are in the bundled font, so the boxes show from the
-			// first frame; ☐ and ☑ would wait for the system fonts.
-			if c.IsChecked {
-				buf.WriteString("■ ")
-			} else {
-				buf.WriteString("□ ")
-			}
-		case *ast.RawHTML:
-			// Inline HTML isn't drawn.
-		default:
-			// Emphasis, links, images, strikethrough and code spans: their
-			// text is in their children.
-			buf.WriteString(extractNodeText(c, source))
-		}
-	}
-	return buf.String()
-}
-
 // resolveText turns backslash escapes and entity references in Markdown
 // text into the characters they stand for. goldmark's HTML writer does
 // both in one pass, so `\&amp;` stays "&amp;"; its HTML-escaped output is
@@ -279,17 +298,21 @@ func extractList(l *ast.List, source []byte) *ListBlock {
 			continue
 		}
 		var item ListItem
-		var paras []string
 		for sub := li.FirstChild(); sub != nil; sub = sub.NextSibling() {
 			if nested, ok := sub.(*ast.List); ok {
 				item.Nested = append(item.Nested, extractList(nested, source))
 				continue
 			}
-			if txt := strings.TrimSpace(blockText(sub, source)); txt != "" {
-				paras = append(paras, txt)
+			spans := trimSpans(blockSpans(sub, source))
+			if len(spans) == 0 {
+				continue
 			}
+			if len(item.Spans) > 0 {
+				item.Spans = append(item.Spans, Span{Text: "\n\n"})
+			}
+			item.Spans = append(item.Spans, spans...)
 		}
-		item.Text = strings.Join(paras, "\n\n")
+		item.Text = plainText(item.Spans)
 		lb.Items = append(lb.Items, item)
 	}
 	return lb
@@ -307,7 +330,23 @@ func blockText(n ast.Node, source []byte) string {
 	case *ast.Blockquote:
 		return extractQuote(n, source).Text
 	default:
-		return extractNodeText(n, source)
+		return plainText(inlineSpans(n, source))
+	}
+}
+
+// blockSpans returns the text of a block inside a list item or quote:
+// styled runs of a paragraph's text, one plain run of anything else.
+func blockSpans(n ast.Node, source []byte) []Span {
+	switch n := n.(type) {
+	case *ast.FencedCodeBlock, *ast.CodeBlock, *ast.List:
+		if txt := blockText(n, source); txt != "" {
+			return []Span{{Text: txt}}
+		}
+		return nil
+	case *ast.Blockquote:
+		return extractQuote(n, source).Spans
+	default:
+		return inlineSpans(n, source)
 	}
 }
 
@@ -325,12 +364,20 @@ func (l *ListBlock) plainText(indent string) string {
 }
 
 func extractQuote(q *ast.Blockquote, source []byte) *QuoteBlock {
-	var buf strings.Builder
+	var spans []Span
 	for child := q.FirstChild(); child != nil; child = child.NextSibling() {
-		buf.WriteString(strings.TrimRight(blockText(child, source), "\n"))
-		buf.WriteString("\n")
+		sub := blockSpans(child, source)
+		for len(sub) > 0 {
+			last := &sub[len(sub)-1]
+			if last.Text = strings.TrimRight(last.Text, "\n"); last.Text != "" {
+				break
+			}
+			sub = sub[:len(sub)-1]
+		}
+		spans = append(append(spans, sub...), Span{Text: "\n"})
 	}
-	return &QuoteBlock{Text: strings.TrimSpace(buf.String())}
+	spans = trimSpans(spans)
+	return &QuoteBlock{Text: plainText(spans), Spans: spans}
 }
 
 func extractTable(t *east.Table, source []byte) *TableBlock {
@@ -340,17 +387,23 @@ func extractTable(t *east.Table, source []byte) *TableBlock {
 		case *east.TableHeader:
 			for rowChild := r.FirstChild(); rowChild != nil; rowChild = rowChild.NextSibling() {
 				if cell, ok := rowChild.(*east.TableCell); ok {
-					tb.Headers = append(tb.Headers, strings.TrimSpace(extractNodeText(cell, source)))
+					spans := trimSpans(inlineSpans(cell, source))
+					tb.Headers = append(tb.Headers, plainText(spans))
+					tb.HeaderSpans = append(tb.HeaderSpans, spans)
 				}
 			}
 		case *east.TableRow:
 			var row []string
+			var rowSpans [][]Span
 			for cellChild := r.FirstChild(); cellChild != nil; cellChild = cellChild.NextSibling() {
 				if cell, ok := cellChild.(*east.TableCell); ok {
-					row = append(row, strings.TrimSpace(extractNodeText(cell, source)))
+					spans := trimSpans(inlineSpans(cell, source))
+					row = append(row, plainText(spans))
+					rowSpans = append(rowSpans, spans)
 				}
 			}
 			tb.Rows = append(tb.Rows, row)
+			tb.RowSpans = append(tb.RowSpans, rowSpans)
 		}
 	}
 	return tb

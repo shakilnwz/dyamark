@@ -11,8 +11,10 @@ import (
 	"dyamark/fonts"
 	"dyamark/markdown"
 
+	"gioui.org/f32"
 	"gioui.org/io/input"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/text"
@@ -285,5 +287,59 @@ func TestPromptTakesKeys(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(p); string(got) != "# mine\n" || a.editor.Text() != "# mine\n" {
 		t.Errorf("file %q, editor %q", got, a.editor.Text())
+	}
+}
+
+// Back in the view after editing, the view's keys work again: the editor
+// no longer takes them.
+func TestViewKeysAfterEditing(t *testing.T) {
+	var src strings.Builder
+	for range 80 {
+		src.WriteString("A paragraph of text.\n\n")
+	}
+	a, _ := openApp(t, "a.md", src.String())
+	r, frame := appFrames(t, a)
+	now := time.Now()
+	a.setMode(ModeEdit)
+	frame(now)
+	frame(now)
+	a.setMode(ModeInline)
+	frame(now)
+	r.Queue(key.Event{Name: key.NamePageDown, State: key.Press})
+	frame(now)
+	frame(now)
+	if a.mdView.List.Position.First == 0 {
+		t.Error("Page Down didn't scroll the view after editing")
+	}
+}
+
+// In split view the view follows the caret, but only while the editor has
+// the keyboard: after a click in the view, it stays where it's scrolled.
+func TestSplitFollowsCaret(t *testing.T) {
+	var src strings.Builder
+	for range 80 {
+		src.WriteString("A paragraph of text.\n\n")
+	}
+	a, _ := openApp(t, "a.md", src.String())
+	r, frame := appFrames(t, a)
+	now := time.Now()
+	a.setMode(ModeSplit)
+	frame(now)
+	frame(now)
+	end := a.editor.Len()
+	a.editor.SetCaret(end, end)
+	frame(now)
+	frame(now)
+	if p := a.mdView.List.Position; p.First+p.Count != len(a.doc.Blocks) {
+		t.Fatalf("caret at the end, view shows blocks %d to %d", p.First, p.First+p.Count-1)
+	}
+
+	r.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: f32.Pt(900, 400)})
+	frame(now)
+	a.editor.SetCaret(0, 0)
+	frame(now)
+	frame(now)
+	if a.mdView.List.Position.First == 0 {
+		t.Error("view followed the caret after a click in it")
 	}
 }

@@ -134,7 +134,7 @@ func TestListStructure(t *testing.T) {
 		{Text: "□ todo"},
 		{Text: "■ done & dusted"},
 	}}
-	if !reflect.DeepEqual(ul, want) {
+	if !reflect.DeepEqual(withoutSpans(ul), want) {
 		t.Errorf("unordered list:\n got %+v\nwant %+v", ul, want)
 	}
 
@@ -144,11 +144,93 @@ func TestListStructure(t *testing.T) {
 	}
 }
 
+// withoutSpans clears the styled runs in l, leaving its text to compare.
+func withoutSpans(l *ListBlock) *ListBlock {
+	for i := range l.Items {
+		l.Items[i].Spans = nil
+		for _, n := range l.Items[i].Nested {
+			withoutSpans(n)
+		}
+	}
+	return l
+}
+
+// Inline text keeps its style: emphasis, strong, code, strikethrough and
+// links, nested in each other. The runs of one link share it, and the
+// document lists each link once.
+func TestInlineSpans(t *testing.T) {
+	doc := Parse([]byte("Plain *it* **bold `code`** ~~gone~~ [a **b**](https://x.org) <https://y.org>\n\n"+
+		"- item [l](other.md)\n\n> quote *q*\n\n| `c` | [t](#top) |\n|---|---|\n| 1 | 2 |\n"), nil)
+	p := doc.Blocks[0].(*ParagraphBlock)
+	link := p.Spans[8].Link
+	want := []Span{
+		{Text: "Plain "},
+		{Text: "it", Style: Italic},
+		{Text: " "},
+		{Text: "bold ", Style: Bold},
+		{Text: "code", Style: Bold | Code},
+		{Text: " "},
+		{Text: "gone", Style: Strike},
+		{Text: " "},
+		{Text: "a ", Link: link},
+		{Text: "b", Style: Bold, Link: link},
+		{Text: " "},
+		{Text: "https://y.org", Link: p.Spans[11].Link},
+	}
+	if !reflect.DeepEqual(p.Spans, want) {
+		t.Errorf("paragraph:\n got %+v\nwant %+v", p.Spans, want)
+	}
+	if p.Text != "Plain it bold code gone a b https://y.org" {
+		t.Errorf("paragraph text %q", p.Text)
+	}
+	if link == nil || link.URL != "https://x.org" || p.Spans[11].Link.URL != "https://y.org" {
+		t.Fatalf("links %+v %+v", link, p.Spans[11].Link)
+	}
+
+	if s := doc.Blocks[1].(*ListBlock).Items[0].Spans; len(s) != 2 || s[1].Link == nil || s[1].Link.URL != "other.md" {
+		t.Errorf("list item: %+v", s)
+	}
+	if s := doc.Blocks[2].(*QuoteBlock).Spans; len(s) != 2 || s[1] != (Span{Text: "q", Style: Italic}) {
+		t.Errorf("quote: %+v", s)
+	}
+	tb := doc.Blocks[3].(*TableBlock)
+	if c := tb.HeaderSpans[0]; len(c) != 1 || c[0].Style != Code {
+		t.Errorf("table header: %+v", tb.HeaderSpans)
+	}
+
+	var urls []string
+	for _, l := range doc.Links {
+		urls = append(urls, l.URL)
+	}
+	if want := []string{"https://x.org", "https://y.org", "other.md", "#top"}; !reflect.DeepEqual(urls, want) {
+		t.Errorf("links %q, want %q", urls, want)
+	}
+}
+
 // Lists inside a quote keep their markers and nesting.
 func TestQuoteWithList(t *testing.T) {
 	doc := Parse([]byte("> Steps:\n>\n> 1. one\n>    - sub\n> 2. two\n"), nil)
 	want := "Steps:\n1. one\n    • sub\n2. two"
 	if got := doc.Blocks[0].(*QuoteBlock).Text; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Each block knows the line it starts on, so a line leads to its block. A
+// rule, which has no text, starts where the next block does.
+func TestBlockLines(t *testing.T) {
+	src := "# Title\n\nOne\ntwo\n\n---\n\n```go\nx\n```\n\n- a\n- b\n"
+	d := Parse([]byte(src), nil)
+	want := []int{1, 3, 8, 8, 12}
+	if !reflect.DeepEqual(d.Lines, want) {
+		t.Fatalf("lines %v, want %v", d.Lines, want)
+	}
+	for line, block := range map[int]int{1: 0, 2: 0, 4: 1, 6: 1, 8: 3, 10: 3, 13: 4, 99: 4} {
+		if got := d.BlockAt(line); got != block {
+			t.Errorf("line %d in block %d, want %d", line, got, block)
+		}
+	}
+	if got := Parse(nil, nil).BlockAt(1); got != -1 {
+		t.Errorf("empty document: block %d", got)
 	}
 }

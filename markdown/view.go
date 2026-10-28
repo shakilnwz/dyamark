@@ -4,6 +4,7 @@ import (
 	"image"
 
 	"gioui.org/f32"
+	"gioui.org/gesture"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -26,6 +27,52 @@ type View struct {
 
 	OnOpenViewer    func(block *SequenceBlock)
 	OnRenderMermaid func(block *MermaidOtherBlock)
+	// OnOpenLink is called with a clicked link's URL.
+	OnOpenLink func(url string)
+
+	// show is 1 + the block to bring into view at the next layout, or 0.
+	show int
+	// heights holds the height of each block laid out last, for laidDoc.
+	heights map[int]int
+	laidDoc *ParsedDocument
+}
+
+// ShowBlock scrolls block i into view at the next layout, as little as
+// it takes.
+func (v *View) ShowBlock(i int) {
+	v.show = i + 1
+}
+
+// reveal scrolls block i into the view, height tall, as little as it
+// takes, using where the blocks were laid out last. A block taller than
+// the view keeps its top in view. It reports false when that layout was
+// of another document.
+func (v *View) reveal(i, height int) bool {
+	if v.laidDoc != v.Doc {
+		return false
+	}
+	p := &v.List.Position
+	h, ok := v.heights[i]
+	if !ok {
+		// Not near the view: put its top at the top.
+		p.First, p.Offset = i, 0
+		return true
+	}
+	top := -p.Offset
+	for k := p.First; k < i; k++ {
+		top += v.heights[k] + v.List.Gap
+	}
+	for k := p.First - 1; k >= i; k-- {
+		top -= v.heights[k] + v.List.Gap
+	}
+	bottom := top + h
+	switch {
+	case top < 0 && bottom < height:
+		p.Offset += top
+	case top > 0 && bottom > height:
+		p.Offset += min(bottom-height, top)
+	}
+	return true
 }
 
 // NewView creates a new markdown document view.
@@ -134,6 +181,40 @@ func (v *View) renderMermaid() {
 	}
 }
 
+// scrollLine is how far the arrow keys scroll, in px.
+const scrollLine = 48
+
+// scrollKey scrolls for the reading keys and reports whether e was one:
+// the arrows by a line, Page Up/Down and Space by a screen less a line,
+// Home and End to either end.
+func (v *View) scrollKey(e key.Event, height int) bool {
+	page := max(height-scrollLine, scrollLine)
+	switch e.Name {
+	case key.NameUpArrow:
+		v.List.Position.Offset -= scrollLine
+	case key.NameDownArrow:
+		v.List.Position.Offset += scrollLine
+	case key.NamePageUp:
+		v.List.Position.Offset -= page
+	case key.NamePageDown:
+		v.List.Position.Offset += page
+	case key.NameSpace:
+		if e.Modifiers.Contain(key.ModShift) {
+			v.List.Position.Offset -= page
+		} else {
+			v.List.Position.Offset += page
+		}
+	case key.NameHome:
+		v.List.Position = layout.Position{}
+	case key.NameEnd:
+		// Past the end; the list stops at the last block's bottom.
+		v.List.Position = layout.Position{First: len(v.Doc.Blocks), BeforeEnd: true}
+	default:
+		return false
+	}
+	return true
+}
+
 // visibleBlocks returns the blocks on screen in the last frame.
 func (v *View) visibleBlocks() []Block {
 	first := v.List.Position.First
@@ -167,6 +248,13 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	}
 	if !v.NoPlainKeys {
 		filters = append(filters,
+			key.Filter{Name: key.NameUpArrow},
+			key.Filter{Name: key.NameDownArrow},
+			key.Filter{Name: key.NamePageUp},
+			key.Filter{Name: key.NamePageDown},
+			key.Filter{Name: key.NameSpace, Optional: key.ModShift},
+			key.Filter{Name: key.NameHome},
+			key.Filter{Name: key.NameEnd},
 			key.Filter{Name: key.NameTab},
 			key.Filter{Name: key.NameTab, Required: key.ModShift},
 			key.Filter{Name: key.NameReturn},
@@ -201,6 +289,8 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 				case "0":
 					v.ResetTextZoom()
 				}
+			} else if v.scrollKey(e, size.Y) {
+				gtx.Execute(op.InvalidateCmd{})
 			} else {
 				if e.Name == key.NameTab {
 					if e.Modifiers.Contain(key.ModShift) {
@@ -245,6 +335,27 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	colGtx.Metric.PxPerSp = gtx.Metric.PxPerSp * v.TextScale
 	colGtx.Constraints = layout.Exact(image.Pt(colW, size.Y))
 
+	for _, l := range v.Doc.Links {
+		for {
+			e, ok := l.click.Update(gtx.Source)
+			if !ok {
+				break
+			}
+			if e.Kind == gesture.KindClick && v.OnOpenLink != nil {
+				v.OnOpenLink(l.URL)
+			}
+		}
+	}
+
+	if v.show > 0 {
+		if v.reveal(v.show-1, size.Y) {
+			v.show = 0
+		} else {
+			// Lay out the new document first.
+			gtx.Execute(op.InvalidateCmd{})
+		}
+	}
+
 	// Wire callbacks into blocks
 	for i, seq := range v.Doc.Sequences {
 		seq.Focused = (i == v.FocusedIndex)
@@ -261,7 +372,14 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 		}
 	}
 
+	if v.heights == nil {
+		v.heights = make(map[int]int)
+	}
+	clear(v.heights)
+	v.laidDoc = v.Doc
 	return v.List.Layout(colGtx, len(v.Doc.Blocks), func(gtx layout.Context, i int) layout.Dimensions {
-		return v.Doc.Blocks[i].Layout(gtx, th, oTheme)
+		dims := v.Doc.Blocks[i].Layout(gtx, th, oTheme)
+		v.heights[i] = dims.Size.Y
+		return dims
 	})
 }

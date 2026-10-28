@@ -1,8 +1,10 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"image"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"time"
@@ -40,6 +42,7 @@ func (a *App) load(data []byte) {
 	a.editor.SetText(string(data))
 	a.saved = string(data)
 	a.dirty = false
+	a.saveErr = ""
 	a.parseAt, a.saveAt = time.Time{}, time.Time{}
 	a.dropConflict()
 }
@@ -108,10 +111,17 @@ func (a *App) saveTo(path string) bool {
 	text := a.editor.Text()
 	if err := SaveFile(path, []byte(text)); err != nil {
 		a.notify(fmt.Sprintf("Couldn't save %s: %v", filepath.Base(path), err))
+		// The path is in the status line already; keep only the reason.
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		a.saveErr = err.Error()
 		return false
 	}
 	a.saved = text
 	a.dirty = false
+	a.saveErr = ""
 	a.saveAt = time.Time{}
 	// Saving over the file settles which version wins.
 	a.dropConflict()

@@ -62,16 +62,19 @@ box, line and label is within 2 px of what `mmdc` draws.
 The fullscreen viewer zooms at the pointer, pans, fits, keeps the
 participant row pinned while scrolling, and toggles sequence numbers.
 
-**Phase 4 (Markdown view):** done. The whole document is drawn, with
-sequence diagrams inline, parse errors over the last good drawing, other
+**Phase 4 (Markdown view):** done. The whole document is drawn, with bold,
+italics, code spans and links (a clicked link opens in the desktop's app
+for it, or here if it's a Markdown file), sequence diagrams inline, parse errors over the last good drawing, other
 Mermaid types as source with `R` to render them through `mmdc`, and live
 reload when the file changes.
 
 **Phase 5 (editing):** done.
 
 - `Ctrl+E` shows the source, `Ctrl+\` puts it beside the rendered view,
-  which follows the typing 80 ms after it stops. Only the diagrams that
-  changed are laid out again.
+  which follows the typing 80 ms after it stops and scrolls to the block
+  the caret is in. Only the diagrams that changed are laid out again.
+- A status line shows the file, whether it's saved (a failed save stays
+  there until one works), the mode and the caret's line and column.
 - Saves are atomic, and a document with a file saves itself a second after
   typing stops. Untitled drafts are only saved when asked.
 - A change on disk is taken in quietly when there are no edits here, and
@@ -98,6 +101,8 @@ Not yet: phases 7 and 8 in [PLAN.md](PLAN.md).
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / save as |
 | `Ctrl+E` | Source / view |
 | `Ctrl+\` | Source and view side by side |
+| `↑` `↓` `PgUp` `PgDn` `Space` `Home` `End` | Scroll the view |
+| Click a link | Open it |
 | `Tab` / `Shift+Tab` | Move between diagrams |
 | `Enter` / click | Open the diagram viewer |
 | `+` `-` `0` `1` `W` `H` | Zoom, fit, 100 %, fit width / height (viewer) |

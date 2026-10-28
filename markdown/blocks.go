@@ -44,6 +44,7 @@ type Block interface {
 type HeadingBlock struct {
 	Level int
 	Text  string
+	Spans []Span
 }
 
 func (h *HeadingBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
@@ -63,27 +64,23 @@ func (h *HeadingBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Th
 		sizeSp = unit.Sp(13)
 	}
 
-	lbl := material.Label(th, sizeSp, h.Text)
-	lbl.Color = oTheme.Foreground
-	lbl.Font.Weight = font.Bold
 	topPad := 12
 	if h.Level <= 2 {
 		topPad = 20
 	}
 	defer op.Affine(f32.Affine2D{}.Offset(f32.Pt(0, float32(topPad)))).Push(gtx.Ops).Pop()
-	dims := lbl.Layout(gtx)
+	dims := layoutSpans(gtx, th, oTheme, orPlain(h.Spans, h.Text), sizeSp, oTheme.Foreground, font.Font{Weight: font.Bold})
 	return layout.Dimensions{Size: image.Pt(dims.Size.X, dims.Size.Y+topPad+6)}
 }
 
 // ParagraphBlock represents a text paragraph.
 type ParagraphBlock struct {
-	Text string
+	Text  string
+	Spans []Span
 }
 
 func (p *ParagraphBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
-	lbl := material.Label(th, unit.Sp(15), p.Text)
-	lbl.Color = oTheme.Foreground
-	dims := lbl.Layout(gtx)
+	dims := layoutSpans(gtx, th, oTheme, orPlain(p.Spans, p.Text), 15, oTheme.Foreground, font.Font{})
 	return layout.Dimensions{Size: image.Pt(dims.Size.X, dims.Size.Y+8)}
 }
 
@@ -423,6 +420,7 @@ type ListBlock struct {
 // blank line, and the lists nested under it.
 type ListItem struct {
 	Text   string
+	Spans  []Span
 	Nested []*ListBlock
 }
 
@@ -457,10 +455,8 @@ func (l *ListBlock) layoutItems(gtx layout.Context, th *material.Theme, oTheme *
 		bLbl.Layout(gtx)
 		transB.Pop()
 
-		tLbl := material.Label(th, unit.Sp(14), item.Text)
-		tLbl.Color = oTheme.Foreground
 		transT := op.Affine(f32.Affine2D{}.Offset(f32.Pt(textX, float32(totalH)))).Push(gtx.Ops)
-		dims := tLbl.Layout(textGtx)
+		dims := layoutSpans(textGtx, th, oTheme, orPlain(item.Spans, item.Text), 14, oTheme.Foreground, font.Font{})
 		transT.Pop()
 
 		itemH := dims.Size.Y
@@ -480,22 +476,19 @@ func (l *ListBlock) layoutItems(gtx layout.Context, th *material.Theme, oTheme *
 
 // QuoteBlock represents a blockquote.
 type QuoteBlock struct {
-	Text string
+	Text  string
+	Spans []Span
 }
 
 func (q *QuoteBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
 	width := gtx.Constraints.Max.X
 	pad := float32(14.0)
 
-	lbl := material.Label(th, unit.Sp(14), q.Text)
-	lbl.Color = withAlpha(oTheme.Foreground, 210)
-	lbl.Font.Style = font.Italic
-
 	textX := int(pad + 8)
 	textGtx := gtx
 	textGtx.Constraints = layout.Constraints{Max: image.Pt(max(width-textX, 0), gtx.Constraints.Max.Y)}
 	trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(textX), 4))).Push(gtx.Ops)
-	dims := lbl.Layout(textGtx)
+	dims := layoutSpans(textGtx, th, oTheme, orPlain(q.Spans, q.Text), 14, withAlpha(oTheme.Foreground, 210), font.Font{Style: font.Italic})
 	trans.Pop()
 
 	totalH := dims.Size.Y + 12
@@ -527,6 +520,9 @@ func (d *DividerBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Th
 type TableBlock struct {
 	Headers []string
 	Rows    [][]string
+	// HeaderSpans and RowSpans are the cells' styled text.
+	HeaderSpans [][]Span
+	RowSpans    [][][]Span
 }
 
 // tableRow is a laid-out table row: its recorded cells and its height.
@@ -561,19 +557,22 @@ func (t *TableBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Them
 	// anything is drawn; a row is as tall as its tallest cell.
 	cellGtx := gtx
 	cellGtx.Constraints = layout.Constraints{Max: image.Pt(max(int(colW-2*cellPadX), 0), gtx.Constraints.Max.Y)}
-	measure := func(texts []string, bold bool) tableRow {
+	measure := func(texts []string, cells [][]Span, bold bool) tableRow {
 		r := tableRow{h: minRowH}
+		var base font.Font
+		if bold {
+			base.Weight = font.Bold
+		}
 		for c, txt := range texts {
 			if c >= numCols {
 				break
 			}
-			lbl := material.Label(th, unit.Sp(13), txt)
-			lbl.Color = oTheme.Foreground
-			if bold {
-				lbl.Font.Weight = font.Bold
+			var spans []Span
+			if c < len(cells) {
+				spans = cells[c]
 			}
 			m := op.Record(gtx.Ops)
-			dims := lbl.Layout(cellGtx)
+			dims := layoutSpans(cellGtx, th, oTheme, orPlain(spans, txt), 13, oTheme.Foreground, base)
 			r.cells = append(r.cells, m.Stop())
 			r.h = max(r.h, float32(dims.Size.Y)+2*cellPadY)
 		}
@@ -590,12 +589,16 @@ func (t *TableBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Them
 	var header tableRow
 	tableH := float32(0)
 	if len(t.Headers) > 0 {
-		header = measure(t.Headers, true)
+		header = measure(t.Headers, t.HeaderSpans, true)
 		tableH += header.h
 	}
 	rows := make([]tableRow, len(t.Rows))
 	for i, row := range t.Rows {
-		rows[i] = measure(row, false)
+		var cells [][]Span
+		if i < len(t.RowSpans) {
+			cells = t.RowSpans[i]
+		}
+		rows[i] = measure(row, cells, false)
 		tableH += rows[i].h
 	}
 
