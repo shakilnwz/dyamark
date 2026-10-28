@@ -427,34 +427,6 @@ func (a *App) Run() error {
 				}
 			}
 
-			if a.mode == ModeInline && a.mdView != nil {
-				for {
-					ev, ok := gtx.Event(
-						key.Filter{Required: key.ModCtrl, Name: "="},
-						key.Filter{Required: key.ModCtrl, Name: "+"},
-						key.Filter{Required: key.ModCtrl, Name: "-"},
-						key.Filter{Required: key.ModCtrl, Name: "_"},
-						key.Filter{Required: key.ModCtrl, Name: "0"},
-					)
-					if !ok {
-						break
-					}
-					if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
-						switch ke.Name {
-						case "=", "+":
-							a.mdView.ZoomTextIn()
-							a.window.Invalidate()
-						case "-", "_":
-							a.mdView.ZoomTextOut()
-							a.window.Invalidate()
-						case "0":
-							a.mdView.ResetTextZoom()
-							a.window.Invalidate()
-						}
-					}
-				}
-			}
-
 			theme := a.currentTheme()
 			paint.FillShape(&a.ops, theme.Background, clip.Rect(image.Rectangle{Max: e.Size}).Op())
 

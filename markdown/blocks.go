@@ -329,7 +329,6 @@ func (m *MermaidOtherBlock) Layout(gtx layout.Context, th *material.Theme, oThem
 			},
 			key.Filter{Focus: m},
 			key.Filter{Name: "R"},
-			key.Filter{Name: "r"},
 		)
 		if !ok {
 			break

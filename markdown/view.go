@@ -107,9 +107,10 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 			key.Filter{Name: key.NameReturn},
 			key.Filter{Name: key.NameEnter},
 			key.Filter{Required: key.ModCtrl, Name: "="},
-			key.Filter{Required: key.ModCtrl, Name: "+"},
+			// `+` and `_` are usually typed with Shift, which Gio reports.
+			key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "+"},
 			key.Filter{Required: key.ModCtrl, Name: "-"},
-			key.Filter{Required: key.ModCtrl, Name: "_"},
+			key.Filter{Required: key.ModCtrl, Optional: key.ModShift, Name: "_"},
 			key.Filter{Required: key.ModCtrl, Name: "0"},
 		)
 		if !ok {

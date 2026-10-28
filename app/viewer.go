@@ -296,10 +296,11 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 			key.Filter{Name: "E"},
 			key.Filter{Name: "["},
 			key.Filter{Name: "]"},
-			key.Filter{Name: "+"},
+			// `+` and `_` are usually typed with Shift, which Gio reports.
+			key.Filter{Name: "+", Optional: key.ModShift},
 			key.Filter{Name: "="},
 			key.Filter{Name: "-"},
-			key.Filter{Name: "_"},
+			key.Filter{Name: "_", Optional: key.ModShift},
 		)
 		if !ok {
 			break
@@ -339,21 +340,21 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 				v.Fit(size.X, size.Y)
 			case "1":
 				v.Set100(size.X, size.Y)
-			case "W", "w":
+			case "W":
 				v.FitWidth(size.X, size.Y)
-			case "H", "h":
+			case "H":
 				v.FitHeight(size.X, size.Y)
 			case "+", "=":
 				v.ZoomBy(1.2, p)
 			case "-", "_":
 				v.ZoomBy(1.0/1.2, p)
-			case "N", "n":
+			case "N":
 				v.ToggleSequenceNumbers()
 			case "[":
 				v.PrevDiagram()
 			case "]":
 				v.NextDiagram()
-			case "E", "e":
+			case "E":
 				if v.OnEdit != nil {
 					v.OnEdit(v.CurIndex)
 				}
