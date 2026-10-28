@@ -52,8 +52,9 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 		cache = NewDiagramCache()
 	}
 
+	// A raw .mmd file holding a sequence diagram is drawn as one.
 	trimmed := strings.TrimSpace(string(source))
-	if strings.HasPrefix(trimmed, "sequenceDiagram") || strings.HasPrefix(trimmed, "%%{init") {
+	if isSequenceSource(trimmed) {
 		source = []byte("```mermaid\n" + trimmed + "\n```\n")
 	}
 
@@ -137,16 +138,19 @@ func Parse(source []byte, cache *DiagramCache) *ParsedDocument {
 }
 
 func isSequenceDiagram(lang, code string) bool {
-	trimmed := strings.TrimSpace(code)
 	if strings.EqualFold(lang, "sequenceDiagram") {
 		return true
 	}
 	if strings.EqualFold(lang, "mermaid") {
-		return strings.HasPrefix(trimmed, "sequenceDiagram") ||
-			strings.HasPrefix(trimmed, "%%{init") ||
-			strings.HasPrefix(trimmed, "---")
+		return isSequenceSource(code)
 	}
 	return false
+}
+
+// isSequenceSource reports whether Mermaid source is a sequence diagram.
+// Like Mermaid's own detector, it looks at the start of the first statement.
+func isSequenceSource(code string) bool {
+	return strings.HasPrefix(mermaidHeader(code), "sequenceDiagram")
 }
 
 func isMermaidDiagram(lang, code string) bool {
@@ -157,18 +161,42 @@ func isMermaidDiagram(lang, code string) bool {
 }
 
 func detectMermaidType(code string) string {
-	lines := strings.Split(strings.TrimSpace(code), "\n")
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if strings.HasPrefix(l, "%%") || strings.HasPrefix(l, "---") {
-			continue
-		}
-		fields := strings.Fields(l)
-		if len(fields) > 0 {
-			return fields[0]
-		}
+	if fields := strings.Fields(mermaidHeader(code)); len(fields) > 0 {
+		return fields[0]
 	}
 	return "mermaid"
+}
+
+// mermaidHeader returns the first statement of Mermaid source, the one that
+// names the diagram type, skipping front matter, %%{init}%% directives,
+// %% comments and blank lines.
+func mermaidHeader(code string) string {
+	lines := strings.Split(code, "\n")
+	i := 0
+	for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
+		i++
+	}
+	// Front matter can only open the diagram.
+	if i < len(lines) && strings.TrimSpace(lines[i]) == "---" {
+		for i++; i < len(lines) && strings.TrimSpace(lines[i]) != "---"; i++ {
+		}
+		i++
+	}
+	for ; i < len(lines); i++ {
+		l := strings.TrimSpace(lines[i])
+		switch {
+		case l == "":
+		case strings.HasPrefix(l, "%%{"):
+			// A directive runs to its closing }%%, maybe lines later.
+			for !strings.Contains(lines[i], "}%%") && i+1 < len(lines) {
+				i++
+			}
+		case strings.HasPrefix(l, "%%"):
+		default:
+			return l
+		}
+	}
+	return ""
 }
 
 func extractCodeLines(lines *text.Segments, source []byte) string {
