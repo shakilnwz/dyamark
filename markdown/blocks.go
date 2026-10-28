@@ -324,6 +324,10 @@ type MermaidOtherBlock struct {
 
 	// hovered is set while the pointer is over the block, so R renders it.
 	hovered bool
+	// imgOp is Rendered made into an image op, which copies it and uploads
+	// it to the GPU, so it's made once per image; imgSrc is that image.
+	imgOp  paint.ImageOp
+	imgSrc image.Image
 }
 
 func (m *MermaidOtherBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
@@ -376,7 +380,11 @@ func (m *MermaidOtherBlock) layoutContent(gtx layout.Context, th *material.Theme
 		offsetX := (width - renderW) / 2
 
 		trans := op.Affine(f32.Affine2D{}.Offset(f32.Pt(float32(offsetX), 10)).Scale(f32.Pt(0, 0), f32.Pt(scale, scale))).Push(gtx.Ops)
-		paint.NewImageOp(m.Rendered).Add(gtx.Ops)
+		if m.imgSrc != m.Rendered {
+			m.imgOp = paint.NewImageOp(m.Rendered)
+			m.imgSrc = m.Rendered
+		}
+		m.imgOp.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		trans.Pop()
 

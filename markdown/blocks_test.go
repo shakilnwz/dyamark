@@ -2,6 +2,7 @@ package markdown
 
 import (
 	"image"
+	"runtime"
 	"testing"
 
 	"gioui.org/font"
@@ -98,5 +99,33 @@ func TestTableCellWrapsInsideColumn(t *testing.T) {
 	longHeader := blockHeight(t, &TableBlock{Headers: []string{longText, "b"}, Rows: [][]string{{"x", "y"}}}, width+40)
 	if longHeader <= short {
 		t.Errorf("header text not wrapped at its column: %d <= %d", longHeader, short)
+	}
+}
+
+// The mmdc PNG is turned into an image op once, not copied and uploaded
+// again every frame.
+func TestMermaidImageOpReused(t *testing.T) {
+	m := &MermaidOtherBlock{Rendered: image.NewNRGBA(image.Rect(0, 0, 1024, 1024))}
+	th, mTheme := testThemes(t)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+		Constraints: layout.Constraints{Min: image.Pt(860, 0), Max: image.Pt(860, 1e6)},
+	}
+	frame := func() {
+		gtx.Reset()
+		m.Layout(gtx, th, mTheme)
+	}
+	frame()
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 5 {
+		frame()
+	}
+	runtime.ReadMemStats(&after)
+	// One copy of the image is 4 MB.
+	if n := after.TotalAlloc - before.TotalAlloc; n > 2<<20 {
+		t.Errorf("%d bytes allocated in 5 frames: the image is copied every frame", n)
 	}
 }
