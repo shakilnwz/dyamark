@@ -1,0 +1,22 @@
+<idea-plugin>
+  <id>io.github.shakilnwz.dyamark</id>
+  <name>dyamark Markdown Preview</name>
+  <vendor url="https://github.com/shakilnwz/dyamark">Shakil Nawaz</vendor>
+  <description><![CDATA[
+    Draws Markdown previews with dyamark: its own Markdown view, and Mermaid
+    sequence diagrams laid out like Mermaid's. Pick it under Settings |
+    Languages &amp; Frameworks | Markdown | Preview.
+  ]]></description>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>org.intellij.plugins.markdown</depends>
+  <depends>com.intellij.modules.jcef</depends>
+
+  <extensions defaultExtensionNs="org.intellij.markdown">
+    <html.panel.provider implementation="dyamark.jetbrains.DyamarkPanelProvider"/>
+  </extensions>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <postStartupActivity implementation="dyamark.jetbrains.SpikeStartup"/>
+  </extensions>
+</idea-plugin>
