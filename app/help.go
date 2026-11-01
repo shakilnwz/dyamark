@@ -3,6 +3,8 @@ package app
 import (
 	"image"
 
+	"dyamark/palette"
+
 	"gioui.org/font"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
@@ -72,7 +74,7 @@ func (a *App) helpKeys(gtx layout.Context) []event.Filter {
 
 // layoutHelp draws the key list over the window; a key that shows it, Esc
 // or a click closes it.
-func (a *App) layoutHelp(gtx layout.Context, theme *Theme) {
+func (a *App) layoutHelp(gtx layout.Context, theme *palette.Theme) {
 	filters := append(a.helpKeys(gtx), key.Filter{Name: key.NameEscape},
 		pointer.Filter{Target: &a.help, Kinds: pointer.Press})
 	for {
@@ -95,7 +97,7 @@ func (a *App) layoutHelp(gtx layout.Context, theme *Theme) {
 	}
 
 	size := gtx.Constraints.Max
-	paint.FillShape(gtx.Ops, withAlpha(theme.Background, 200), clip.Rect(image.Rectangle{Max: size}).Op())
+	paint.FillShape(gtx.Ops, palette.WithAlpha(theme.Background, 200), clip.Rect(image.Rectangle{Max: size}).Op())
 	area := clip.Rect(image.Rectangle{Max: size}).Push(gtx.Ops)
 	event.Op(gtx.Ops, &a.help)
 	area.Pop()

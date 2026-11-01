@@ -3,6 +3,8 @@ package app
 import (
 	"image"
 
+	"dyamark/palette"
+
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -46,7 +48,7 @@ func (a *App) closePrompt() {
 
 // layoutPrompt handles the prompt's keys and clicks and draws it over the
 // window.
-func (a *App) layoutPrompt(gtx layout.Context, theme *Theme) {
+func (a *App) layoutPrompt(gtx layout.Context, theme *palette.Theme) {
 	p := a.prompt
 	var chosen *Choice
 	filters := make([]key.Filter, len(p.Choices))
@@ -75,7 +77,7 @@ func (a *App) layoutPrompt(gtx layout.Context, theme *Theme) {
 	}
 
 	size := gtx.Constraints.Max
-	paint.FillShape(gtx.Ops, withAlpha(theme.Background, 180), clip.Rect(image.Rectangle{Max: size}).Op())
+	paint.FillShape(gtx.Ops, palette.WithAlpha(theme.Background, 180), clip.Rect(image.Rectangle{Max: size}).Op())
 
 	pad := gtx.Dp(20)
 	w := min(gtx.Dp(520), size.X-gtx.Dp(32))
@@ -137,7 +139,7 @@ func keyLabel(name key.Name) string {
 }
 
 // layoutNotice draws the notice line at the bottom of the window.
-func (a *App) layoutNotice(gtx layout.Context, theme *Theme) {
+func (a *App) layoutNotice(gtx layout.Context, theme *palette.Theme) {
 	size := gtx.Constraints.Max
 	pad := gtx.Dp(8)
 	inner := gtx

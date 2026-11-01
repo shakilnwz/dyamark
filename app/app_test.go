@@ -10,6 +10,7 @@ import (
 
 	"dyamark/fonts"
 	"dyamark/markdown"
+	"dyamark/palette"
 
 	"gioui.org/f32"
 	"gioui.org/layout"
@@ -18,6 +19,15 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 )
+
+const sampleMMD1 = `sequenceDiagram
+Alice->>Bob: Hello Bob
+Bob-->>Alice: Hi Alice`
+
+const sampleMMD2 = `sequenceDiagram
+autonumber
+Client->>Server: Request
+Server-->>Client: Response`
 
 const markdownWithFences = `# Title
 
@@ -213,7 +223,7 @@ func TestReloadKeepsViewerPlace(t *testing.T) {
 	}
 	frame := func() {
 		gtx.Reset()
-		a.viewer.Layout(gtx, mTheme, DefaultTheme(10))
+		a.viewer.Layout(gtx, mTheme, palette.Default(10))
 	}
 	frame()
 

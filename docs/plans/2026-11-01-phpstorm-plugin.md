@@ -1,7 +1,7 @@
 # Plan: a PhpStorm plugin that draws Markdown previews with dyamark
 
-Date: 2026-11-01. Status: step 1 done, except one question on focus
-(below). Step 2 is next.
+Date: 2026-11-01. Status: steps 1 and 2 done, except one question on
+focus (below). Step 3 is next.
 
 ## Goal
 
@@ -157,13 +157,17 @@ raw Markdown.
 
 ## The Go side
 
-1. **Move the desktop-free parts out of `app/`.** The diagram viewer
-   (`app/viewer.go`) imports only Gio and `seq`, but sits in the package
-   that imports D-Bus. It uses `app.Theme` and a few colour helpers.
-   - `palette/`: `Theme`, the colour helpers and `deriveSeqTheme`.
+1. **Move the desktop-free parts out of `app/`.** *Done.* The diagram
+   viewer (`app/viewer.go`) imported only Gio and `seq`, but sat in the
+   package that imports D-Bus. It used `app.Theme` and `withAlpha`.
+   - `palette/`: `Theme`, `Default`, `DeriveSeq`, `WithAlpha` and `Mix`.
+     It uses `seq.HexColor`, which `app` had a copy of.
      `app/theme.go` keeps loading `colors.toml`, the watcher and `hyprctl`.
-   - `viewer/`: the `Viewer`, unchanged except for its imports.
-   `app/` uses both, and works and tests as before.
+   - `viewer/`: the `Viewer`, with `NewViewer` now `viewer.New`, and its
+     tests.
+   `app/` uses both. All 228 tests still pass, plus one for `Mix`; the
+   app's first paint and heap are the same as before; and `viewer/`,
+   `palette/`, `markdown/` and `seq/` build for `js/wasm`.
 2. **`cmd/dyamark-web/`** (`//go:build js && wasm`) is the wasm `main`. It
    is kept thin: the logic is in a `web/` package that builds and tests
    natively, behind a small `Host` interface.

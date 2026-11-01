@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"dyamark/palette"
+
 	"gioui.org/f32"
 	"gioui.org/gesture"
 	"gioui.org/io/pointer"
@@ -177,9 +179,9 @@ func (a *App) whereText() string {
 
 // layoutToolbar handles the toolbar's clicks and draws it filling gtx's
 // area, with a button's tooltip above it.
-func (a *App) layoutToolbar(gtx layout.Context, theme *Theme) {
+func (a *App) layoutToolbar(gtx layout.Context, theme *palette.Theme) {
 	size := gtx.Constraints.Max
-	muted := withAlpha(theme.Foreground, 180)
+	muted := palette.WithAlpha(theme.Foreground, 180)
 	tools := a.tools()
 	for _, t := range tools {
 		for {
@@ -212,11 +214,11 @@ func (a *App) layoutToolbar(gtx layout.Context, theme *Theme) {
 		r := gtx.Dp(6)
 		switch {
 		case on:
-			paint.FillShape(gtx.Ops, withAlpha(theme.Accent, 40), clip.UniformRRect(t.rect, r).Op(gtx.Ops))
+			paint.FillShape(gtx.Ops, palette.WithAlpha(theme.Accent, 40), clip.UniformRRect(t.rect, r).Op(gtx.Ops))
 		case hovered:
-			paint.FillShape(gtx.Ops, withAlpha(theme.Foreground, 24), clip.UniformRRect(t.rect, r).Op(gtx.Ops))
+			paint.FillShape(gtx.Ops, palette.WithAlpha(theme.Foreground, 24), clip.UniformRRect(t.rect, r).Op(gtx.Ops))
 		}
-		c := withAlpha(theme.Foreground, 150)
+		c := palette.WithAlpha(theme.Foreground, 150)
 		switch {
 		case on:
 			c = theme.Accent
@@ -289,7 +291,7 @@ func drawIcon(gtx layout.Context, icon func(*iconPath), at image.Point, size int
 }
 
 // drawTooltip says what t does and its key, just above it.
-func (a *App) drawTooltip(gtx layout.Context, theme *Theme, t *tool) {
+func (a *App) drawTooltip(gtx layout.Context, theme *palette.Theme, t *tool) {
 	text := t.name
 	if t.keys != "" {
 		text += " · " + t.keys
@@ -309,7 +311,7 @@ func (a *App) drawTooltip(gtx layout.Context, theme *Theme, t *tool) {
 	box := image.Rect(x, t.rect.Min.Y-h-gtx.Dp(4), x+w, t.rect.Min.Y-gtx.Dp(4))
 	r := gtx.Dp(unit.Dp(min(float32(theme.Rounding), 6)))
 	paint.FillShape(gtx.Ops, theme.LighterBackground, clip.UniformRRect(box, r).Op(gtx.Ops))
-	paint.FillShape(gtx.Ops, withAlpha(theme.Foreground, 40),
+	paint.FillShape(gtx.Ops, palette.WithAlpha(theme.Foreground, 40),
 		clip.Stroke{Path: clip.UniformRRect(box, r).Path(gtx.Ops), Width: 1}.Op())
 	off := op.Offset(box.Min.Add(image.Pt(pad, pad))).Push(gtx.Ops)
 	call.Add(gtx.Ops)
@@ -317,7 +319,7 @@ func (a *App) drawTooltip(gtx layout.Context, theme *Theme, t *tool) {
 }
 
 // errorColor is the theme's red, or a plain red when it has none.
-func errorColor(theme *Theme) color.NRGBA {
+func errorColor(theme *palette.Theme) color.NRGBA {
 	if theme.Colors[1].A != 0 {
 		return theme.Colors[1]
 	}

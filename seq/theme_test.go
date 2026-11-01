@@ -125,3 +125,24 @@ func TestTextOn(t *testing.T) {
 		t.Errorf("black on white: %.2f", c)
 	}
 }
+
+func TestHexColor(t *testing.T) {
+	cases := []struct {
+		input    string
+		alpha    uint8
+		expected color.NRGBA
+	}{
+		{"#fff", 255, color.NRGBA{R: 255, G: 255, B: 255, A: 255}},
+		{"#000000", 255, color.NRGBA{R: 0, G: 0, B: 0, A: 255}},
+		{"#7186fd", 200, color.NRGBA{R: 0x71, G: 0x86, B: 0xfd, A: 200}},
+		{"#12345678", 255, color.NRGBA{R: 0x12, G: 0x34, B: 0x56, A: 0x78}},
+		{"invalid", 255, color.NRGBA{R: 200, G: 200, B: 200, A: 255}},
+	}
+
+	for _, tc := range cases {
+		got := HexColor(tc.input, tc.alpha)
+		if got != tc.expected {
+			t.Errorf("HexColor(%q, %d) = %v, expected %v", tc.input, tc.alpha, got, tc.expected)
+		}
+	}
+}

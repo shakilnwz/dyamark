@@ -1,4 +1,8 @@
-package app
+// Package viewer is the fullscreen sequence diagram viewer: zoom at the
+// pointer, pan, fit, the pinned participant row and focus-a-participant.
+// It draws with Gio and needs nothing from the desktop, so the app and the
+// web build share it.
+package viewer
 
 import (
 	"fmt"
@@ -8,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"dyamark/palette"
 	"dyamark/seq"
 	"dyamark/seq/draw"
 	layoutPkg "dyamark/seq/layout"
@@ -70,8 +75,8 @@ type Viewer struct {
 	OnEdit  func(index int)
 }
 
-// NewViewer creates a new diagram viewer.
-func NewViewer(diagrams []*parse.Diagram, initialIndex int) *Viewer {
+// New creates a diagram viewer showing diagrams[initialIndex].
+func New(diagrams []*parse.Diagram, initialIndex int) *Viewer {
 	v := &Viewer{
 		Diagrams: diagrams,
 		CurIndex: initialIndex,
@@ -264,7 +269,7 @@ func (v *Viewer) Set100(winW, winH int) {
 }
 
 // Layout handles events and renders the viewer.
-func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) layout.Dimensions {
+func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *palette.Theme) layout.Dimensions {
 	size := gtx.Constraints.Max
 	if size.X <= 0 || size.Y <= 0 {
 		return layout.Dimensions{}
@@ -478,7 +483,7 @@ const clickSlop = 4
 // focused participant again on top, at full strength.
 func (v *Viewer) dimExcept(gtx layout.Context, th *material.Theme, seqTh seq.Theme, diag *layoutPkg.Diagram, bg color.NRGBA) {
 	vb := diag.ViewBox
-	paint.FillShape(gtx.Ops, withAlpha(bg, 200), clip.Rect(image.Rect(0, 0, int(vb.W)+1, int(vb.H)+1)).Op())
+	paint.FillShape(gtx.Ops, palette.WithAlpha(bg, 200), clip.Rect(image.Rect(0, 0, int(vb.W)+1, int(vb.H)+1)).Op())
 	draw.Draw(gtx, th, seqTh, diag.Involving(v.Focus))
 }
 
@@ -597,7 +602,7 @@ func (v *Viewer) actorLabel(id string) string {
 // each over its lifeline, once a tall diagram is scrolled up past them.
 // A name too long for the room between lifelines is cut short, and shown
 // in full while the pointer is on it.
-func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh seq.Theme, oTheme *Theme, size image.Point) {
+func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh seq.Theme, oTheme *palette.Theme, size image.Point) {
 	v.chips = v.chips[:0]
 	row, headerH, ok := v.stickyRow()
 	if !ok {
@@ -605,7 +610,7 @@ func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh 
 	}
 	h := int(headerH)
 	paint.FillShape(gtx.Ops, oTheme.Background, clip.Rect(image.Rect(0, 0, size.X, h)).Op())
-	paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 40), clip.Rect(image.Rect(0, h-1, size.X, h)).Op())
+	paint.FillShape(gtx.Ops, palette.WithAlpha(oTheme.Foreground, 40), clip.Rect(image.Rect(0, h-1, size.X, h)).Op())
 
 	// label records a name in one line at most maxW wide.
 	label := func(s string, c color.NRGBA, maxW int) (op.CallOp, image.Point) {
@@ -679,7 +684,7 @@ func (v *Viewer) drawStickyActors(gtx layout.Context, th *material.Theme, seqTh 
 	box = box.Add(image.Pt(min(max(tip.rect.Min.X, padX), max(size.X-box.Dx()-padX, 0)), 0))
 	tr := clip.UniformRRect(box, gtx.Dp(unit.Dp(min(float32(oTheme.Rounding), 6))))
 	paint.FillShape(gtx.Ops, oTheme.LighterBackground, tr.Op(gtx.Ops))
-	paint.FillShape(gtx.Ops, withAlpha(oTheme.Foreground, 40), clip.Stroke{Path: tr.Path(gtx.Ops), Width: 1}.Op())
+	paint.FillShape(gtx.Ops, palette.WithAlpha(oTheme.Foreground, 40), clip.Stroke{Path: tr.Path(gtx.Ops), Width: 1}.Op())
 	off := op.Offset(image.Pt(box.Min.X+padX, box.Min.Y+gap/2)).Push(gtx.Ops)
 	text.Add(gtx.Ops)
 	off.Pop()
@@ -722,7 +727,7 @@ func (v *Viewer) infoAlpha(now time.Time) float32 {
 
 // drawInfo draws the info line in the bottom right corner, after a
 // diagram opens or a key or zoom, fading after a moment.
-func (v *Viewer) drawInfo(gtx layout.Context, th *material.Theme, oTheme *Theme, size image.Point) {
+func (v *Viewer) drawInfo(gtx layout.Context, th *material.Theme, oTheme *palette.Theme, size image.Point) {
 	if v.wakeInfo {
 		v.wakeInfo = false
 		v.infoSince = gtx.Now
@@ -753,7 +758,7 @@ func (v *Viewer) drawInfo(gtx layout.Context, th *material.Theme, oTheme *Theme,
 	box := image.Rectangle{Min: image.Pt(size.X-dims.Size.X-3*pad, size.Y-dims.Size.Y-3*pad)}
 	box.Max = box.Min.Add(dims.Size.Add(image.Pt(2*pad, 2*pad)))
 	r := gtx.Dp(unit.Dp(float32(oTheme.Rounding)))
-	paint.FillShape(gtx.Ops, fade(withAlpha(oTheme.LighterBackground, 230)), clip.UniformRRect(box, r).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, fade(palette.WithAlpha(oTheme.LighterBackground, 230)), clip.UniformRRect(box, r).Op(gtx.Ops))
 	off := op.Offset(box.Min.Add(image.Pt(pad, pad))).Push(gtx.Ops)
 	text.Add(gtx.Ops)
 	off.Pop()
@@ -761,7 +766,7 @@ func (v *Viewer) drawInfo(gtx layout.Context, th *material.Theme, oTheme *Theme,
 
 // drawFocusHint says at the bottom of the viewer who is focused and how
 // to stop.
-func (v *Viewer) drawFocusHint(gtx layout.Context, th *material.Theme, oTheme *Theme, size image.Point) {
+func (v *Viewer) drawFocusHint(gtx layout.Context, th *material.Theme, oTheme *palette.Theme, size image.Point) {
 	pad := gtx.Dp(8)
 	rec := op.Record(gtx.Ops)
 	lbl := material.Body2(th, "Showing "+v.actorLabel(v.Focus)+" · click it again or press Esc to show all")
@@ -775,7 +780,7 @@ func (v *Viewer) drawFocusHint(gtx layout.Context, th *material.Theme, oTheme *T
 	box := image.Rectangle{Min: image.Pt(pad, size.Y-dims.Size.Y-3*pad)}
 	box.Max = box.Min.Add(dims.Size.Add(image.Pt(2*pad, 2*pad)))
 	r := gtx.Dp(unit.Dp(float32(oTheme.Rounding)))
-	paint.FillShape(gtx.Ops, withAlpha(oTheme.LighterBackground, 230), clip.UniformRRect(box, r).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, palette.WithAlpha(oTheme.LighterBackground, 230), clip.UniformRRect(box, r).Op(gtx.Ops))
 	off := op.Offset(box.Min.Add(image.Pt(pad, pad))).Push(gtx.Ops)
 	text.Add(gtx.Ops)
 	off.Pop()

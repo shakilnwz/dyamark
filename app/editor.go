@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"dyamark/fonts"
+	"dyamark/palette"
 
 	"gioui.org/app"
 	"gioui.org/io/key"
@@ -383,7 +384,7 @@ func (a *App) notify(msg string) {
 
 // layoutEditor handles the editor's input and draws it filling gtx's
 // area, its text in a column like the view's when there's room.
-func (a *App) layoutEditor(gtx layout.Context, theme *Theme, column bool) layout.Dimensions {
+func (a *App) layoutEditor(gtx layout.Context, theme *palette.Theme, column bool) layout.Dimensions {
 	size := gtx.Constraints.Max
 	paint.FillShape(gtx.Ops, theme.Background, clip.Rect(image.Rectangle{Max: size}).Op())
 
@@ -429,7 +430,7 @@ func (a *App) layoutEditor(gtx layout.Context, theme *Theme, column bool) layout
 	ed.Font.Typeface = fonts.Mono
 	ed.TextSize = unit.Sp(editorTextSize * scale)
 	ed.Color = theme.Foreground
-	ed.SelectionColor = withAlpha(theme.SelectionBg, 160)
+	ed.SelectionColor = palette.WithAlpha(theme.SelectionBg, 160)
 	ed.Layout(inner)
 	off.Pop()
 	return layout.Dimensions{Size: size}

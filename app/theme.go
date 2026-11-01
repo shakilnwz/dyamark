@@ -7,11 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	"dyamark/palette"
 	"dyamark/seq"
 
 	"github.com/fsnotify/fsnotify"
@@ -20,21 +19,6 @@ import (
 
 // defaultRounding is used when hyprctl can't be asked.
 const defaultRounding = 10
-
-// Theme holds the application UI palette, desktop rounding, and diagram theme.
-type Theme struct {
-	Background        color.NRGBA
-	Foreground        color.NRGBA
-	Accent            color.NRGBA
-	LighterBackground color.NRGBA
-	Cursor            color.NRGBA
-	SelectionBg       color.NRGBA
-	SelectionFg       color.NRGBA
-	Colors            [16]color.NRGBA
-	Rounding          int
-
-	Seq seq.Theme
-}
 
 // RawOmarchyColors maps the keys in ~/.local/state/omarchy/current/theme/colors.toml
 type RawOmarchyColors struct {
@@ -70,22 +54,6 @@ type HyprlandOption struct {
 	Set    bool   `json:"set"`
 }
 
-// DefaultTheme returns the fallback dark theme with #FFD60A accent.
-func DefaultTheme(rounding int) *Theme {
-	t := &Theme{
-		Background:        hexColor("#0b0f19", 255),
-		Foreground:        hexColor("#e6edf3", 255),
-		Accent:            hexColor("#FFD60A", 255),
-		LighterBackground: hexColor("#1f242c", 255),
-		Cursor:            hexColor("#e6edf3", 255),
-		SelectionBg:       hexColor("#2f3746", 255),
-		SelectionFg:       hexColor("#ffffff", 255),
-		Rounding:          rounding,
-	}
-	t.deriveSeqTheme()
-	return t
-}
-
 // OmarchyDir is the directory Omarchy swaps the current theme into.
 func OmarchyDir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -111,8 +79,8 @@ func HyprlandRounding() (rounding int, ok bool) {
 
 // LoadTheme reads colors.toml at colorsPath, falling back to the default
 // theme for anything missing or unreadable.
-func LoadTheme(colorsPath string, rounding int) *Theme {
-	t := DefaultTheme(rounding)
+func LoadTheme(colorsPath string, rounding int) *palette.Theme {
+	t := palette.Default(rounding)
 	data, err := os.ReadFile(colorsPath)
 	if err != nil {
 		return t
@@ -124,7 +92,7 @@ func LoadTheme(colorsPath string, rounding int) *Theme {
 
 	set := func(dst *color.NRGBA, hex string) {
 		if hex != "" {
-			*dst = hexColor(hex, 255)
+			*dst = seq.HexColor(hex, 255)
 		}
 	}
 	set(&t.Background, raw.Background)
@@ -147,43 +115,11 @@ func LoadTheme(colorsPath string, rounding int) *Theme {
 	// Only the background was given: derive a lighter one, so actor boxes
 	// still stand out from the page.
 	if raw.Background != "" && raw.LighterBackground == "" {
-		t.LighterBackground = mix(t.Background, t.Foreground, 0.08)
+		t.LighterBackground = palette.Mix(t.Background, t.Foreground, 0.08)
 	}
 
-	t.deriveSeqTheme()
+	t.DeriveSeq()
 	return t
-}
-
-func (t *Theme) deriveSeqTheme() {
-	// Notes use the theme's yellow, falling back to amber.
-	noteAccent := hexColor("#ffd166", 255)
-	if t.Colors[3].A != 0 {
-		noteAccent = t.Colors[3]
-	}
-	if t.Colors[11].A != 0 {
-		noteAccent = t.Colors[11]
-	}
-
-	t.Seq = seq.Theme{
-		ActorBkg:         t.LighterBackground,
-		ActorBorder:      t.Accent,
-		ActorText:        t.Foreground,
-		Lifeline:         withAlpha(t.Foreground, 110),
-		Signal:           t.Accent,
-		SignalText:       t.Foreground,
-		ActivationBkg:    withAlpha(t.Accent, 60),
-		ActivationBorder: t.Accent,
-		// Mixed from the page colour, so notes read on light themes too.
-		NoteBkg:     mix(t.Background, noteAccent, 0.18),
-		NoteBorder:  noteAccent,
-		NoteText:    t.Foreground,
-		FrameBkg:    withAlpha(t.LighterBackground, 90),
-		FrameBorder: withAlpha(t.Accent, 180),
-		// The tab is the faint frame fill, so both read in the text colour.
-		FrameText: t.Foreground,
-		LabelText: t.Foreground,
-		Rounding:  float32(t.Rounding),
-	}
 }
 
 // ThemeWatcher reloads the theme when Omarchy switches or retints it.
@@ -196,7 +132,7 @@ type ThemeWatcher struct {
 	watcher  *fsnotify.Watcher
 	dir      string
 	rounding int
-	onChange func(*Theme)
+	onChange func(*palette.Theme)
 
 	mu    sync.Mutex
 	timer *time.Timer
@@ -207,7 +143,7 @@ const themeReloadDelay = 100 * time.Millisecond
 
 // WatchTheme calls onChange with a freshly loaded theme after each change
 // under dir (Omarchy's current/ directory).
-func WatchTheme(dir string, rounding int, onChange func(*Theme)) (*ThemeWatcher, error) {
+func WatchTheme(dir string, rounding int, onChange func(*palette.Theme)) (*ThemeWatcher, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
@@ -281,44 +217,4 @@ func (tw *ThemeWatcher) scheduleReload() {
 		tw.watchThemeDir()
 		tw.onChange(LoadTheme(filepath.Join(tw.themeDir(), "colors.toml"), tw.rounding))
 	})
-}
-
-func hexColor(hex string, alpha uint8) color.NRGBA {
-	hex = strings.TrimPrefix(hex, "#")
-	if len(hex) == 3 {
-		hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
-	}
-	if len(hex) == 6 {
-		val, err := strconv.ParseUint(hex, 16, 32)
-		if err == nil {
-			return color.NRGBA{
-				R: uint8(val >> 16),
-				G: uint8(val >> 8),
-				B: uint8(val),
-				A: alpha,
-			}
-		}
-	} else if len(hex) == 8 {
-		val, err := strconv.ParseUint(hex, 16, 32)
-		if err == nil {
-			return color.NRGBA{
-				R: uint8(val >> 24),
-				G: uint8(val >> 16),
-				B: uint8(val >> 8),
-				A: uint8(val),
-			}
-		}
-	}
-	return color.NRGBA{R: 200, G: 200, B: 200, A: alpha}
-}
-
-func withAlpha(c color.NRGBA, a uint8) color.NRGBA {
-	c.A = a
-	return c
-}
-
-// mix blends b into a by t (0 gives a, 1 gives b), keeping a's alpha.
-func mix(a, b color.NRGBA, t float32) color.NRGBA {
-	lerp := func(x, y uint8) uint8 { return uint8(float32(x) + (float32(y)-float32(x))*t + 0.5) }
-	return color.NRGBA{R: lerp(a.R, b.R), G: lerp(a.G, b.G), B: lerp(a.B, b.B), A: a.A}
 }

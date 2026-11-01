@@ -1,10 +1,11 @@
-package app
+package viewer
 
 import (
 	"image"
 	"testing"
 
 	"dyamark/fonts"
+	"dyamark/palette"
 	"dyamark/seq/parse"
 
 	"gioui.org/f32"
@@ -37,7 +38,7 @@ func TestViewerZoomAndPan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v := NewViewer([]*parse.Diagram{d1, d2}, 0)
+	v := New([]*parse.Diagram{d1, d2}, 0)
 	if v.Diagram == nil {
 		t.Fatal("expected laid-out diagram")
 	}
@@ -87,7 +88,7 @@ func TestViewerNavigationAndToggle(t *testing.T) {
 	d1, _ := parse.Parse(sampleMMD1)
 	d2, _ := parse.Parse(sampleMMD2)
 
-	v := NewViewer([]*parse.Diagram{d1, d2}, 0)
+	v := New([]*parse.Diagram{d1, d2}, 0)
 
 	// Navigation
 	if v.CurIndex != 0 {
@@ -116,7 +117,7 @@ func TestViewerNavigationAndToggle(t *testing.T) {
 
 func TestViewerLayout(t *testing.T) {
 	d1, _ := parse.Parse(sampleMMD1)
-	v := NewViewer([]*parse.Diagram{d1}, 0)
+	v := New([]*parse.Diagram{d1}, 0)
 
 	collection, err := fonts.Collection()
 	if err != nil {
@@ -124,7 +125,7 @@ func TestViewerLayout(t *testing.T) {
 	}
 	mTheme := material.NewTheme()
 	mTheme.Shaper = text.NewShaper(text.WithCollection(collection), text.NoSystemFonts())
-	oTheme := DefaultTheme(10)
+	oTheme := palette.Default(10)
 
 	ops := new(op.Ops)
 	gtx := layout.Context{
@@ -147,7 +148,7 @@ func TestViewerScrollZoomAndDragPan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := NewViewer([]*parse.Diagram{d1}, 0)
+	v := New([]*parse.Diagram{d1}, 0)
 
 	collection, err := fonts.Collection()
 	if err != nil {
@@ -155,7 +156,7 @@ func TestViewerScrollZoomAndDragPan(t *testing.T) {
 	}
 	mTheme := material.NewTheme()
 	mTheme.Shaper = text.NewShaper(text.WithCollection(collection), text.NoSystemFonts())
-	oTheme := DefaultTheme(10)
+	oTheme := palette.Default(10)
 
 	var r input.Router
 	ops := new(op.Ops)
@@ -249,7 +250,7 @@ func TestViewerShiftedZoomKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := NewViewer([]*parse.Diagram{d1}, 0)
+	v := New([]*parse.Diagram{d1}, 0)
 
 	collection, err := fonts.Collection()
 	if err != nil {
@@ -257,7 +258,7 @@ func TestViewerShiftedZoomKeys(t *testing.T) {
 	}
 	mTheme := material.NewTheme()
 	mTheme.Shaper = text.NewShaper(text.WithCollection(collection), text.NoSystemFonts())
-	oTheme := DefaultTheme(10)
+	oTheme := palette.Default(10)
 
 	var r input.Router
 	gtx := layout.Context{

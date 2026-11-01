@@ -16,7 +16,9 @@ import (
 
 	"dyamark/fonts"
 	"dyamark/markdown"
+	"dyamark/palette"
 	"dyamark/seq/parse"
+	"dyamark/viewer"
 
 	"gioui.org/app"
 	"gioui.org/io/event"
@@ -64,7 +66,7 @@ type App struct {
 	window *app.Window
 	mTheme *material.Theme
 	mdView *markdown.View
-	viewer *Viewer
+	viewer *viewer.Viewer
 	mode   Mode
 	cache  *markdown.DiagramCache
 	doc    *markdown.ParsedDocument
@@ -77,7 +79,7 @@ type App struct {
 	fullShaper chan *text.Shaper
 
 	mu    sync.Mutex
-	theme *Theme
+	theme *palette.Theme
 	// pending holds work from other goroutines that touches the document
 	// or views; it runs on the UI goroutine at the start of the next frame.
 	pending []func()
@@ -231,7 +233,7 @@ func New(opts Options) (*App, error) {
 			initialASTs = append(initialASTs, s.AST)
 		}
 	}
-	viewer := NewViewer(initialASTs, 0)
+	vw := viewer.New(initialASTs, 0)
 
 	initMode := ModeInline
 	if opts.FilePath != "" {
@@ -251,12 +253,12 @@ func New(opts Options) (*App, error) {
 		window: w,
 		mTheme: mTheme,
 		mdView: mdView,
-		viewer: viewer,
+		viewer: vw,
 		mode:   initMode,
 		cache:  cache,
 		doc:    doc,
 		opts:   opts,
-		theme:  DefaultTheme(rounding),
+		theme:  palette.Default(rounding),
 
 		fullShaper: make(chan *text.Shaper, 1),
 	}
@@ -308,12 +310,12 @@ func New(opts Options) (*App, error) {
 		}()
 	}
 
-	viewer.OnClose = func() {
+	vw.OnClose = func() {
 		a.mode = a.backMode
 		a.focusEditor = a.editing()
 		a.window.Invalidate()
 	}
-	viewer.OnEdit = func(int) {
+	vw.OnEdit = func(int) {
 		pos := a.shownPos()
 		if pos < 0 {
 			return
@@ -349,7 +351,7 @@ func New(opts Options) (*App, error) {
 	return a, nil
 }
 
-func (a *App) setTheme(t *Theme) {
+func (a *App) setTheme(t *palette.Theme) {
 	a.mu.Lock()
 	a.theme = t
 	a.mu.Unlock()
@@ -484,7 +486,7 @@ func (a *App) runPending() {
 	}
 }
 
-func (a *App) currentTheme() *Theme {
+func (a *App) currentTheme() *palette.Theme {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.theme
@@ -632,14 +634,14 @@ func (a *App) frame(gtx layout.Context) {
 }
 
 // layoutSplit draws the source on the left and the view on the right.
-func (a *App) layoutSplit(gtx layout.Context, theme *Theme, mdTh *markdown.Theme) {
+func (a *App) layoutSplit(gtx layout.Context, theme *palette.Theme, mdTh *markdown.Theme) {
 	size := gtx.Constraints.Max
 	half := size.X / 2
 	left := gtx
 	left.Constraints = layout.Exact(image.Pt(half, size.Y))
 	a.layoutEditor(left, theme, false)
 
-	paint.FillShape(gtx.Ops, withAlpha(theme.Foreground, 40),
+	paint.FillShape(gtx.Ops, palette.WithAlpha(theme.Foreground, 40),
 		clip.Rect(image.Rect(half, 0, half+1, size.Y)).Op())
 
 	right := gtx

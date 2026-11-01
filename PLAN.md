@@ -252,7 +252,9 @@ declarations may go inside a `box`.
 dyamark/
   main.go                    flags, starts the window
   app/                       window, modes, keys, file state, theme wiring
-    app.go  view.go  editor.go  viewer.go  files.go  theme.go  portal.go
+    app.go  editor.go  files.go  theme.go  portal.go  toolbar.go  find.go
+  palette/                   the page palette and the diagram theme derived from it
+  viewer/                    the fullscreen diagram viewer
   markdown/                  goldmark AST → view blocks (Gio widgets)
   seq/
     parse/                   copied from mmgo (LICENSE.mmgo, UPSTREAM), extended

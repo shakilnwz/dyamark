@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 
+	"dyamark/palette"
+
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -188,7 +190,7 @@ func (a *App) findStatus() string {
 
 // layoutFind handles the find bar's input and draws it filling gtx's
 // area.
-func (a *App) layoutFind(gtx layout.Context, theme *Theme) {
+func (a *App) layoutFind(gtx layout.Context, theme *palette.Theme) {
 	f := &a.find
 	if f.focus {
 		f.focus = false
@@ -230,9 +232,9 @@ func (a *App) layoutFind(gtx layout.Context, theme *Theme) {
 
 	size := gtx.Constraints.Max
 	paint.FillShape(gtx.Ops, theme.LighterBackground, clip.Rect(image.Rectangle{Max: size}).Op())
-	paint.FillShape(gtx.Ops, withAlpha(theme.Foreground, 40), clip.Rect(image.Rect(0, 0, size.X, 1)).Op())
+	paint.FillShape(gtx.Ops, palette.WithAlpha(theme.Foreground, 40), clip.Rect(image.Rect(0, 0, size.X, 1)).Op())
 	pad := gtx.Dp(12)
-	muted := withAlpha(theme.Foreground, 210)
+	muted := palette.WithAlpha(theme.Foreground, 210)
 	label := func(s string, x int, c color.NRGBA) int {
 		l := material.Caption(a.mTheme, s)
 		l.Color = c
@@ -256,7 +258,7 @@ func (a *App) layoutFind(gtx layout.Context, theme *Theme) {
 	inset := gtx.Dp(6)
 	field := image.Rect(x, inset, x+fieldW, size.Y-inset)
 	paint.FillShape(gtx.Ops, theme.Background, clip.UniformRRect(field, gtx.Dp(4)).Op(gtx.Ops))
-	border := withAlpha(theme.Foreground, 60)
+	border := palette.WithAlpha(theme.Foreground, 60)
 	if gtx.Focused(&f.ed) {
 		border = theme.Accent
 	}
@@ -264,7 +266,7 @@ func (a *App) layoutFind(gtx layout.Context, theme *Theme) {
 	ed := material.Editor(a.mTheme, &f.ed, "")
 	ed.TextSize = unit.Sp(13)
 	ed.Color = theme.Foreground
-	ed.SelectionColor = withAlpha(theme.SelectionBg, 160)
+	ed.SelectionColor = palette.WithAlpha(theme.SelectionBg, 160)
 	eg := gtx
 	eg.Constraints = layout.Constraints{Max: image.Pt(fieldW-2*inset, field.Dy())}
 	rec := op.Record(gtx.Ops)
@@ -284,5 +286,5 @@ func (a *App) layoutFind(gtx layout.Context, theme *Theme) {
 	if s := a.findStatus(); s != "" {
 		x += label(s, x, c) + 2*pad
 	}
-	label("Enter next · Shift+Enter previous · Esc close", x, withAlpha(theme.Foreground, 190))
+	label("Enter next · Shift+Enter previous · Esc close", x, palette.WithAlpha(theme.Foreground, 190))
 }

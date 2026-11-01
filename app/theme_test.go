@@ -6,56 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"dyamark/palette"
+	"dyamark/seq"
 )
-
-func TestDefaultTheme(t *testing.T) {
-	th := DefaultTheme(10)
-
-	// Accent should match Omarchy fallback #FFD60A
-	expectedAccent := hexColor("#FFD60A", 255)
-	if th.Accent != expectedAccent {
-		t.Errorf("expected accent %v, got %v", expectedAccent, th.Accent)
-	}
-	if th.Seq.ActorBorder.A == 0 {
-		t.Error("expected non-zero alpha for actor border")
-	}
-	if th.Seq.Signal.A == 0 {
-		t.Error("expected non-zero alpha for signal color")
-	}
-	// Frame labels sit on the faint frame fill, so they're in the text
-	// colour, not the page's.
-	if th.Seq.FrameText != th.Foreground || th.Seq.LabelText != th.Foreground {
-		t.Errorf("frame text %v, label text %v, want the foreground %v", th.Seq.FrameText, th.Seq.LabelText, th.Foreground)
-	}
-}
-
-func TestZeroRoundingIsKept(t *testing.T) {
-	th := DefaultTheme(0)
-	if th.Rounding != 0 || th.Seq.Rounding != 0 {
-		t.Errorf("rounding 0 should give square corners, got %d / %v", th.Rounding, th.Seq.Rounding)
-	}
-}
-
-func TestHexColor(t *testing.T) {
-	cases := []struct {
-		input    string
-		alpha    uint8
-		expected color.NRGBA
-	}{
-		{"#fff", 255, color.NRGBA{R: 255, G: 255, B: 255, A: 255}},
-		{"#000000", 255, color.NRGBA{R: 0, G: 0, B: 0, A: 255}},
-		{"#7186fd", 200, color.NRGBA{R: 0x71, G: 0x86, B: 0xfd, A: 200}},
-		{"#12345678", 255, color.NRGBA{R: 0x12, G: 0x34, B: 0x56, A: 0x78}},
-		{"invalid", 255, color.NRGBA{R: 200, G: 200, B: 200, A: 255}},
-	}
-
-	for _, tc := range cases {
-		got := hexColor(tc.input, tc.alpha)
-		if got != tc.expected {
-			t.Errorf("hexColor(%q, %d) = %v, expected %v", tc.input, tc.alpha, got, tc.expected)
-		}
-	}
-}
 
 const lightColors = `
 accent = "#1e66f5"
@@ -80,17 +34,17 @@ func TestLoadTheme(t *testing.T) {
 	path := writeColors(t, t.TempDir(), lightColors)
 	th := LoadTheme(path, 4)
 
-	if want := hexColor("#eff1f5", 255); th.Background != want {
+	if want := seq.HexColor("#eff1f5", 255); th.Background != want {
 		t.Errorf("background = %v, want %v", th.Background, want)
 	}
-	if want := hexColor("#1e66f5", 255); th.Seq.Signal != want {
+	if want := seq.HexColor("#1e66f5", 255); th.Seq.Signal != want {
 		t.Errorf("signal = %v, want the accent %v", th.Seq.Signal, want)
 	}
 	if th.Seq.Rounding != 4 {
 		t.Errorf("seq rounding = %v, want 4", th.Seq.Rounding)
 	}
 	// No lighter_background given: it is derived, not left as the dark default.
-	if th.LighterBackground == DefaultTheme(4).LighterBackground {
+	if th.LighterBackground == palette.Default(4).LighterBackground {
 		t.Error("lighter background should be derived from a light theme's background")
 	}
 }
@@ -107,7 +61,7 @@ func TestNotesFollowLightTheme(t *testing.T) {
 
 func TestLoadThemeMissingFile(t *testing.T) {
 	th := LoadTheme(filepath.Join(t.TempDir(), "nope.toml"), 7)
-	if th.Background != DefaultTheme(7).Background {
+	if th.Background != palette.Default(7).Background {
 		t.Error("a missing colors.toml should give the default theme")
 	}
 }
@@ -119,8 +73,8 @@ func TestWatchThemeFollowsSwap(t *testing.T) {
 	dir := t.TempDir()
 	writeColors(t, filepath.Join(dir, "theme"), `background = "#000000"`)
 
-	got := make(chan *Theme, 8)
-	w, err := WatchTheme(dir, 0, func(th *Theme) { got <- th })
+	got := make(chan *palette.Theme, 8)
+	w, err := WatchTheme(dir, 0, func(th *palette.Theme) { got <- th })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +99,7 @@ func TestWatchThemeFollowsSwap(t *testing.T) {
 		for {
 			select {
 			case th := <-got:
-				if th.Background == hexColor(want, 255) {
+				if th.Background == seq.HexColor(want, 255) {
 					return
 				}
 			case <-deadline:

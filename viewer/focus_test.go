@@ -1,4 +1,4 @@
-package app
+package viewer
 
 import (
 	"image"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"dyamark/fonts"
+	"dyamark/palette"
 	layoutPkg "dyamark/seq/layout"
 	"dyamark/seq/parse"
 
@@ -43,7 +44,7 @@ func viewerFrames(t *testing.T, v *Viewer, size image.Point) (*input.Router, fun
 	return r, func() {
 		gtx.Reset()
 		gtx.Now = gtxNow
-		v.Layout(gtx, th, DefaultTheme(10))
+		v.Layout(gtx, th, palette.Default(10))
 		r.Frame(gtx.Ops)
 	}
 }
@@ -73,7 +74,7 @@ func viewerOf(t *testing.T, src string) *Viewer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewViewer([]*parse.Diagram{d}, 0)
+	return New([]*parse.Diagram{d}, 0)
 }
 
 // Clicking a participant focuses it; clicking it again, or Esc, shows all
@@ -126,7 +127,7 @@ func TestViewerFocusThroughReload(t *testing.T) {
 	d1, _ := parse.Parse(sampleMMD1)
 	d2, _ := parse.Parse(sampleMMD1 + "\nAlice->>Bob: again")
 	d3, _ := parse.Parse("sequenceDiagram\nAlice->>Carol: hi")
-	v := NewViewer([]*parse.Diagram{d1}, 0)
+	v := New([]*parse.Diagram{d1}, 0)
 	v.Focus = "Bob"
 	v.ReloadDiagrams([]*parse.Diagram{d2}, 0)
 	if v.Focus != "Bob" {
@@ -239,7 +240,7 @@ func TestStickyRowLongNames(t *testing.T) {
 func TestViewerInfo(t *testing.T) {
 	d1, _ := parse.Parse("sequenceDiagram\ntitle Checkout flow\nA->>B: hi")
 	d2, _ := parse.Parse("sequenceDiagram\nA->>B: hi")
-	v := NewViewer([]*parse.Diagram{d1, d2}, 0)
+	v := New([]*parse.Diagram{d1, d2}, 0)
 	v.Zoom = 1.5
 	if got := v.infoText(); got != "Checkout flow · 1 of 2 · 150 % · ? for keys" {
 		t.Errorf("info %q", got)
