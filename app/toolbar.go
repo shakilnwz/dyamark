@@ -269,7 +269,7 @@ func (a *App) layoutToolbar(gtx layout.Context, theme *palette.Theme) {
 	msg, problem := a.statusText()
 	c := muted
 	if problem {
-		c = errorColor(theme)
+		c = theme.Error()
 	}
 	x += pad
 	call, sz := label(msg, c, size.X-x-2*pad-right.X)
@@ -316,12 +316,4 @@ func (a *App) drawTooltip(gtx layout.Context, theme *palette.Theme, t *tool) {
 	off := op.Offset(box.Min.Add(image.Pt(pad, pad))).Push(gtx.Ops)
 	call.Add(gtx.Ops)
 	off.Pop()
-}
-
-// errorColor is the theme's red, or a plain red when it has none.
-func errorColor(theme *palette.Theme) color.NRGBA {
-	if theme.Colors[1].A != 0 {
-		return theme.Colors[1]
-	}
-	return color.NRGBA{R: 0xf8, G: 0x51, B: 0x49, A: 0xff}
 }

@@ -255,6 +255,9 @@ dyamark/
     app.go  editor.go  files.go  theme.go  portal.go  toolbar.go  find.go
   palette/                   the page palette and the diagram theme derived from it
   viewer/                    the fullscreen diagram viewer
+  web/                       the preview in a web page, for the PhpStorm plugin; index.html, check.mjs
+  cmd/dyamark-web/           its WebAssembly main
+  jetbrains/                 the PhpStorm plugin (Gradle, Kotlin)
   markdown/                  goldmark AST → view blocks (Gio widgets)
   seq/
     parse/                   copied from mmgo (LICENSE.mmgo, UPSTREAM), extended
@@ -265,6 +268,8 @@ dyamark/
   bin/build                  go build -trimpath -ldflags "-s -w -X gioui.org/app.ID=dyamark" -o build/dyamark
   bin/test                   go test ./...
   bin/golden                 regenerate reference SVGs with mmdc
+  bin/wasm                   build/web/: dyamark.wasm, wasm_exec.js, index.html
+  bin/webcheck               bin/wasm, then check it in headless Chromium
   bin/install                makepkg -fsi in pkgbuild/
   pkgbuild/PKGBUILD  pkgbuild/dyamark.desktop  pkgbuild/dyamark.svg
   README.md  LICENSE  .gitignore

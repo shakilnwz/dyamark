@@ -1,7 +1,6 @@
 # Plan: a PhpStorm plugin that draws Markdown previews with dyamark
 
-Date: 2026-11-01. Status: steps 1 and 2 done, except one question on
-focus (below). Step 3 is next.
+Date: 2026-11-01. Status: steps 1 to 3 done. Step 4 is next.
 
 ## Goal
 
@@ -107,15 +106,19 @@ raw Markdown.
   focused the diagram, `Enter` asked for the viewer. **`Ctrl+=` and
   `Ctrl+-` didn't**: the IDE takes them. Step 4 adds IDE actions for
   text size that forward to the focused preview.
-- **Focus on click: an open question.** In a manual try in the sandbox,
-  clicks on the diagram reached dyamark but no key presses arrived. The
-  automated run gave the preview focus itself
-  (`IdeFocusManager.requestFocus` and `CefBrowser.setFocus(true)`), so a
-  click may not be giving it the keyboard. Step 4 makes a mouse press in
-  the preview take the focus the same way, and checks it by hand.
+- **Focus on click.** In a manual try in the sandbox, clicks on the
+  diagram reached dyamark but no key presses arrived. The automated run
+  gave the preview focus itself (`IdeFocusManager.requestFocus` and
+  `CefBrowser.setFocus(true)`), and its keys arrived. Step 3 found half
+  of why: Gio's js backend takes keys in a hidden text field, which it
+  blurs at start and focuses only while Gio shows text input, and
+  nothing in the view asked for that. In headless Chromium, keys before
+  a click don't arrive, and after one they now do (below). Step 4 still
+  makes a mouse press give the browser the IDE's focus, and checks both
+  by hand in PhpStorm.
 - **Gio doesn't say when WebGL is missing.** With the GPU off it still
   reported frames, and drew nothing. The page's own WebGL check is the
-  one to trust: step 4 shows a message there instead of a blank pane.
+  one to trust: since step 3 the page shows a message instead.
 - **A reload loses the document.** After a page reload (DevTools, or a
   renderer crash) dyamark comes up empty. Step 4 sends the source again
   on every `ready`, not only the first.
@@ -168,21 +171,58 @@ raw Markdown.
    `app/` uses both. All 228 tests still pass, plus one for `Mix`; the
    app's first paint and heap are the same as before; and `viewer/`,
    `palette/`, `markdown/` and `seq/` build for `js/wasm`.
-2. **`cmd/dyamark-web/`** (`//go:build js && wasm`) is the wasm `main`. It
-   is kept thin: the logic is in a `web/` package that builds and tests
-   natively, behind a small `Host` interface.
-   - In: `dyamark.setSource(text)`, `setTheme(json)`,
-     `scrollToLine(line)`, `setFocus(bool)`. Each call is posted to the
-     window's goroutine and wakes it, the same way `App.post` does now.
-     Calls made before the first frame are kept and applied in order.
-   - Out, through `globalThis.dyamarkHost`: `ready()`, `openLink(url)`,
-     `editLine(line)`, `scrolled(line)`, `log(msg)`.
-   - Modes: view and viewer, as in the app.
-   - Parsing waits 80 ms after the last `setSource`, and diagrams are
-     cached by source hash. The IDE sends the whole text on each change.
-3. **`bin/wasm`** builds `build/web/`: `dyamark.wasm`, Go's
-   `wasm_exec.js` for the same Go version, and `web/index.html` with the
-   bridge script.
+2. **`cmd/dyamark-web/`** (`//go:build js && wasm`) is the wasm `main`.
+   *Done.* It is thin: the logic is `web.Preview`, which builds and is
+   tested natively, behind a small `Host` interface.
+   - In, on `globalThis.dyamark`: `setSource(text)`, `setTheme(json)`
+     (returns an error's text, or null) and `scrollToLine(line)`. Each
+     call is queued and wakes the window; calls made before the first
+     frame are kept, and all run in order at the next frame.
+   - Out, one text message each through the page's `dyamarkSend`, which
+     queues them until the plugin's `dyamarkHostPost` is there:
+     `ready N` (ms since the page started), `drawn`, `link URL`,
+     `edit LINE`, `scroll LINE`, `log TEXT`, `error TEXT`, and from the
+     page itself `webgl …` and `loaded N`.
+   - Modes: view and viewer. `Tab`/`Enter` or a click opens a diagram;
+     `E` asks the IDE to edit its source and **keeps the viewer open**,
+     so it follows the edit, the way the app's viewer follows a reload;
+     `Esc` goes back.
+   - `scroll LINE` is told only when scrolling in the view moves the top
+     block, not when a new source or `scrollToLine` does, so the IDE
+     isn't told back what it just did.
+   - `setTheme` takes `{background, foreground, accent,
+     lighterBackground, error, rounding}`; what's left out keeps the
+     default, except that a background alone derives the lighter one, as
+     the app does. It goes through `DeriveSeq` like an Omarchy theme.
+     `palette.Theme.Error()` replaced the app's `errorColor`.
+   - A mouse press asks Gio to show text input, which focuses its hidden
+     text field, so the keys typed after a click arrive.
+   - Other Mermaid types show their source without the "R to render with
+     mmdc" hint, which now shows only where rendering is wired.
+   - **Changed from the plan:** no 80 ms wait before parsing. The
+     Markdown plugin already waits about 150 ms; of the sources sent
+     between two frames only the newest is parsed. No `setFocus`: nothing
+     needed it. Messages are one string channel, not methods on a
+     `dyamarkHost` object.
+   - **Not done:** `?` for the key list (the viewer's chip says
+     "? for keys", and nothing answers yet). Step 4.
+3. **`bin/wasm`** builds `build/web/`: `dyamark.wasm` (17 MB, before the
+   jar compresses it), Go's `wasm_exec.js` for the same Go version, and
+   `web/index.html` with the bridge script. Without WebGL the page says
+   so and doesn't start the wasm.
+4. **Tests.** `web/web_test.go` (9 tests, in `bin/test`) drives a
+   `Preview` with a fake `Host`: calls before the first frame, the newest
+   source winning, `scroll` told only for scrolling, the viewer's `E` and
+   `Esc`, the viewer following edits, a click opening text input, and the
+   palette. Each was checked to fail with the fault it is for.
+   `bin/webcheck` (not in `bin/test`: it needs Node 22+ and Chromium)
+   builds the wasm and runs `web/check.mjs`, which drives the page over
+   the DevTools protocol in headless Chromium with SwiftShader, as the
+   plugin will: ready in 0.8–0.9 s, `setSource` to `drawn` in 117–167 ms
+   for the first document and 13–64 ms for an edit; pixels of the
+   palette's background, boxes, text and accent; `scrollToLine` not told
+   back; keys after a click; `Tab`, `Enter`, `E` giving `edit 6`; and the
+   no-WebGL message. Screenshots go to `build/webcheck/`.
 
 ## The plugin side (Kotlin, `jetbrains/`)
 
@@ -198,14 +238,15 @@ raw Markdown.
     with `application/wasm` for the binary, so
     `instantiateStreaming` works.
   - `setHtml(text, offset, path)` sends `setSource` with the text
-    JSON-escaped. Until `ready()`, only the newest text is kept.
+    JSON-escaped. Until `ready`, only the newest text is kept; it is sent
+    again on every `ready`, in case the page reloaded.
   - `scrollToMarkdownSrcOffset(offset)` turns the offset into a line
-    with the document, then sends `scrollToLine`. `scrolled(line)` from
+    with the document, then sends `scrollToLine`. `scroll LINE` from
     dyamark tells the panel's `ScrollListener`s, so "synchronise
     scrolling" works both ways.
-  - `editLine(line)` opens the file at that line (`OpenFileDescriptor`)
+  - `edit LINE` opens the file at that line (`OpenFileDescriptor`)
     and focuses the editor.
-  - `openLink(url)`: `BrowserUtil.browse` for the web, the IDE for
+  - `link URL`: `BrowserUtil.browse` for the web, the IDE for
     files, relative to `documentPath`.
   - Disposes its browser and JS queries with the panel.
 - `ThemeBridge` reads the global editor scheme and sends `setTheme` to

@@ -23,21 +23,25 @@
     while (queue.length) window.dyamarkHostPost(queue.shift());
   };
 
-  // Spike: say which WebGL there is, and which keys reach the page.
-  (() => {
+  // Gio draws with WebGL; say which there is, for the IDE's log.
+  const webgl = (() => {
     const canvas = document.createElement("canvas");
-    let version = "webgl2";
-    let gl = canvas.getContext("webgl2");
-    if (!gl) { version = "webgl"; gl = canvas.getContext("webgl"); }
-    if (!gl) { dyamarkSend("webgl none"); return; }
-    const info = gl.getExtension("WEBGL_debug_renderer_info");
-    const renderer = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
-    dyamarkSend("webgl " + version + " " + renderer);
+    for (const version of ["webgl2", "webgl"]) {
+      const gl = canvas.getContext(version);
+      if (!gl) continue;
+      const info = gl.getExtension("WEBGL_debug_renderer_info");
+      return version + " " + gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+    }
+    return "none";
   })();
-  document.addEventListener("keydown", (e) => {
-    const mods = (e.ctrlKey ? "Ctrl+" : "") + (e.altKey ? "Alt+" : "") + (e.shiftKey ? "Shift+" : "");
-    dyamarkSend("key " + mods + e.key);
-  }, true);
+  dyamarkSend("webgl " + webgl);
+
+  const problem = (text) => {
+    dyamarkSend("error " + text);
+    const p = document.getElementById("problem");
+    p.textContent = text;
+    p.style.display = "block";
+  };
 </script>
 <script src="wasm_exec.js"></script>
 </head>
@@ -45,19 +49,18 @@
 <div id="problem"></div>
 <div id="giowindow"></div>
 <script>
-  const go = new Go();
-  WebAssembly.instantiateStreaming(fetch("dyamark.wasm"), go.importObject)
-    .then((result) => {
-      dyamarkSend("loaded " + elapsed());
-      setTimeout(() => dyamarkSend("wasm-memory " + result.instance.exports.mem.buffer.byteLength), 3000);
-      return go.run(result.instance);
-    })
-    .catch((err) => {
-      dyamarkSend("error " + err);
-      const p = document.getElementById("problem");
-      p.textContent = "dyamark couldn't start: " + err;
-      p.style.display = "block";
-    });
+  if (webgl === "none") {
+    // Without WebGL Gio draws nothing at all; say so instead.
+    problem("dyamark draws with WebGL, and this browser has none: its GPU may be turned off.");
+  } else {
+    const go = new Go();
+    WebAssembly.instantiateStreaming(fetch("dyamark.wasm"), go.importObject)
+      .then((result) => {
+        dyamarkSend("loaded " + elapsed());
+        return go.run(result.instance);
+      })
+      .catch((err) => problem("dyamark couldn't start: " + err));
+  }
 </script>
 </body>
 </html>

@@ -1,110 +1,71 @@
 //go:build js && wasm
 
-// Command dyamark-web is dyamark's Markdown view built for WebAssembly, to
-// run in the PhpStorm plugin's preview panel.
+// Command dyamark-web is dyamark's preview built for WebAssembly, for the
+// PhpStorm plugin's preview panel. The preview itself is package web; this
+// binds it to the page.
 //
-// This is the spike of step 1 in docs/plans/2026-11-01-phpstorm-plugin.md:
-// just enough to see whether WebGL, typing and keys work inside PhpStorm.
-// Step 3 replaces it.
+// The page calls, on globalThis.dyamark:
 //
-// The page calls dyamark.setSource(text) with the whole document. dyamark
-// answers through the page's dyamarkSend(message): "ready" after the first
-// frame, "drawn" after the frame that shows a new source, then "link URL",
-// "viewer LINE", "edit LINE", "render" and "error TEXT".
+//	setSource(text)     the whole document, on each change
+//	setTheme(json)      the palette, as web.Colors; returns an error's
+//	                    text, or null
+//	scrollToLine(line)  puts the block holding line, 1-based, at the top
+//
+// dyamark answers through the page's dyamarkSend(message), one message
+// each: "ready" with the first frame, "drawn" with the frame that first
+// shows a new source, "link URL", "edit LINE", "scroll LINE", "log TEXT"
+// and "error TEXT".
 package main
 
 import (
 	"fmt"
-	"image"
-	"sync"
 	"syscall/js"
 
 	"dyamark/fonts"
-	"dyamark/markdown"
-	"dyamark/seq"
+	"dyamark/web"
 
 	"gioui.org/app"
 	"gioui.org/op"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
 	"gioui.org/text"
-	"gioui.org/widget/material"
 )
 
 func main() {
 	w := new(app.Window)
-	in := new(inbox)
-	js.Global().Set("dyamark", js.ValueOf(map[string]any{
-		"setSource": js.FuncOf(func(_ js.Value, args []js.Value) any {
-			if len(args) > 0 {
-				in.put(args[0].String())
-				w.Invalidate()
-			}
-			return nil
-		}),
-	}))
-	go run(w, in)
-	app.Main()
-}
-
-// inbox holds the newest source from the page until the next frame.
-type inbox struct {
-	mu     sync.Mutex
-	source *string
-}
-
-func (in *inbox) put(s string) {
-	in.mu.Lock()
-	in.source = &s
-	in.mu.Unlock()
-}
-
-func (in *inbox) take() *string {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	s := in.source
-	in.source = nil
-	return s
-}
-
-// send passes a message to the page, which passes it to the plugin.
-func send(msg string) {
-	if f := js.Global().Get("dyamarkSend"); f.Type() == js.TypeFunction {
-		f.Invoke(msg)
-	}
-}
-
-func run(w *app.Window, in *inbox) {
-	th := material.NewTheme()
 	faces, err := fonts.Collection()
 	if err != nil {
 		send("error fonts: " + err.Error())
 	}
-	th.Shaper = text.NewShaper(text.NoSystemFonts(), text.WithCollection(faces))
+	p := web.New(host{}, text.NewShaper(text.NoSystemFonts(), text.WithCollection(faces)), w.Invalidate)
 
-	// The app's fallback palette, until step 5 takes the IDE's colours.
-	mdTh := &markdown.Theme{
-		Background:        seq.HexColor("#0b0f19", 255),
-		Foreground:        seq.HexColor("#e6edf3", 255),
-		Accent:            seq.HexColor("#FFD60A", 255),
-		LighterBackground: seq.HexColor("#1f242c", 255),
-		Error:             seq.HexColor("#f85149", 255),
-		Rounding:          8,
-		Seq:               seq.DarkTheme(),
-	}
-	th.Palette.Bg = mdTh.Background
-	th.Palette.Fg = mdTh.Foreground
-	th.Palette.ContrastBg = mdTh.Accent
+	js.Global().Set("dyamark", js.ValueOf(map[string]any{
+		"setSource": js.FuncOf(func(_ js.Value, args []js.Value) any {
+			if len(args) > 0 {
+				p.SetSource(args[0].String())
+			}
+			return nil
+		}),
+		"setTheme": js.FuncOf(func(_ js.Value, args []js.Value) any {
+			if len(args) == 0 {
+				return "setTheme: no palette"
+			}
+			if err := p.SetTheme(args[0].String()); err != nil {
+				return err.Error()
+			}
+			return nil
+		}),
+		"scrollToLine": js.FuncOf(func(_ js.Value, args []js.Value) any {
+			if len(args) > 0 {
+				p.ScrollToLine(args[0].Int())
+			}
+			return nil
+		}),
+	}))
+	go run(w, p)
+	app.Main()
+}
 
-	cache := markdown.NewDiagramCache()
-	view := markdown.NewView(markdown.Parse(nil, cache))
-	view.OnOpenLink = func(url string) { send("link " + url) }
-	view.OnEditLine = func(line int) { send(fmt.Sprintf("edit %d", line)) }
-	view.OnOpenViewer = func(b *markdown.SequenceBlock) { send(fmt.Sprintf("viewer %d", b.StartLine)) }
-	view.OnRenderMermaid = func(*markdown.MermaidOtherBlock) { send("render") }
-
+func run(w *app.Window, p *web.Preview) {
 	var ops op.Ops
-	ready := false
 	for {
 		switch e := w.Event().(type) {
 		case app.DestroyEvent:
@@ -113,21 +74,26 @@ func run(w *app.Window, in *inbox) {
 			}
 			return
 		case app.FrameEvent:
-			changed := false
-			if s := in.take(); s != nil {
-				view.SetDocument(markdown.Parse([]byte(*s), cache))
-				changed = true
-			}
 			gtx := app.NewContext(&ops, e)
-			paint.FillShape(gtx.Ops, mdTh.Background, clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Op())
-			view.Layout(gtx, th, mdTh)
+			p.Layout(gtx)
 			e.Frame(gtx.Ops)
-			if !ready {
-				ready = true
-				send("ready")
-			} else if changed {
-				send("drawn")
-			}
 		}
+	}
+}
+
+// host passes the preview's messages to the page, which passes them on to
+// the plugin.
+type host struct{}
+
+func (host) Ready()              { send("ready") }
+func (host) Drawn()              { send("drawn") }
+func (host) OpenLink(url string) { send("link " + url) }
+func (host) EditLine(line int)   { send(fmt.Sprint("edit ", line)) }
+func (host) Scrolled(line int)   { send(fmt.Sprint("scroll ", line)) }
+func (host) Log(msg string)      { send("log " + msg) }
+
+func send(msg string) {
+	if f := js.Global().Get("dyamarkSend"); f.Type() == js.TypeFunction {
+		f.Invoke(msg)
 	}
 }

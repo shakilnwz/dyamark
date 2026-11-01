@@ -76,6 +76,14 @@ func (t *Theme) DeriveSeq() {
 	}
 }
 
+// Error is the theme's red, or a plain red when it has none.
+func (t *Theme) Error() color.NRGBA {
+	if t.Colors[1].A != 0 {
+		return t.Colors[1]
+	}
+	return color.NRGBA{R: 0xf8, G: 0x51, B: 0x49, A: 0xff}
+}
+
 // WithAlpha returns c with alpha a.
 func WithAlpha(c color.NRGBA, a uint8) color.NRGBA {
 	c.A = a

@@ -585,7 +585,7 @@ func (a *App) frame(gtx layout.Context) {
 		Foreground:        theme.Foreground,
 		Accent:            theme.Accent,
 		LighterBackground: theme.LighterBackground,
-		Error:             errorColor(theme),
+		Error:             theme.Error(),
 		Rounding:          theme.Rounding,
 		Seq:               theme.Seq,
 	}

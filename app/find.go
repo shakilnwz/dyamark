@@ -281,7 +281,7 @@ func (a *App) layoutFind(gtx layout.Context, theme *palette.Theme) {
 
 	c := muted
 	if len(f.matches) == 0 && f.ed.Len() > 0 {
-		c = errorColor(theme)
+		c = theme.Error()
 	}
 	if s := a.findStatus(); s != "" {
 		x += label(s, x, c) + 2*pad

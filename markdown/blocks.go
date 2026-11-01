@@ -508,10 +508,10 @@ func (m *MermaidOtherBlock) layoutContent(gtx layout.Context, th *material.Theme
 		return layout.Dimensions{Size: image.Pt(width, renderH+24)}
 	}
 
-	// Code block with hint to render with mmdc
-	cb := CodeBlock{
-		Language: fmt.Sprintf("%s — Press 'R' to render with mmdc", m.DiagramType),
-		Code:     m.Source,
+	// The source, and how to render it where mmdc can be run.
+	cb := CodeBlock{Language: m.DiagramType, Code: m.Source}
+	if m.OnRender != nil {
+		cb.Language = fmt.Sprintf("%s — Press 'R' to render with mmdc", m.DiagramType)
 	}
 	dims := cb.Layout(gtx, th, oTheme)
 

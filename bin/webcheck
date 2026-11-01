@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Builds the web build and checks it in headless Chromium: web/check.mjs
+# drives it the way the PhpStorm plugin does. Needs Node 22+ and Chromium
+# ($CHROMIUM, or chromium on the PATH). Screenshots go to build/webcheck/.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+"$SCRIPT_DIR/wasm"
+echo "==> Checking build/web in headless Chromium..."
+node "$ROOT_DIR/web/check.mjs" "$ROOT_DIR/build/web" "$ROOT_DIR/build/webcheck"
