@@ -78,4 +78,43 @@ class DyamarkPanelTest {
         assertEquals("\"with \\\"quotes\\\" and \\\\ backslash\"", jsString("with \"quotes\" and \\ backslash"))
         assertEquals("\"tag \\u003cscript>\"", jsString("tag <script>"))
     }
+
+    @Test
+    fun testIsMarkdownFile() {
+        assertTrue(isMarkdownFile("README.md"))
+        assertTrue(isMarkdownFile("doc.markdown"))
+        assertTrue(isMarkdownFile("notes.mdown"))
+        assertTrue(isMarkdownFile("file.mkdn"))
+        assertTrue(isMarkdownFile("UPPER.MD"))
+        assertTrue(isMarkdownFile("PATH/TO/DOC.MARKDOWN"))
+
+        assertFalse(isMarkdownFile("code.go"))
+        assertFalse(isMarkdownFile("notes.txt"))
+        assertFalse(isMarkdownFile("script.sh"))
+        assertFalse(isMarkdownFile("markdown"))
+        assertFalse(isMarkdownFile(""))
+    }
+
+    @Test
+    fun testDyamarkNotificationShouldNotify() {
+        val jcef = org.intellij.plugins.markdown.ui.preview.MarkdownHtmlPanelProvider.ProviderInfo("JCEF Browser", "com.intellij.markdown.jcef.preview.JCEFHtmlPanelProvider")
+
+        // Never shown, and currently JCEF or null -> should notify
+        assertTrue(DyamarkNotification.shouldNotify(isShown = false, currentProvider = null))
+        assertTrue(DyamarkNotification.shouldNotify(isShown = false, currentProvider = jcef))
+
+        // Already shown once -> should not notify
+        assertFalse(DyamarkNotification.shouldNotify(isShown = true, currentProvider = null))
+        assertFalse(DyamarkNotification.shouldNotify(isShown = true, currentProvider = jcef))
+        assertFalse(DyamarkNotification.shouldNotify(isShown = true, currentProvider = DyamarkPanelProvider.INFO))
+
+        // Never shown, but already using Dyamark -> should not notify
+        assertFalse(DyamarkNotification.shouldNotify(isShown = false, currentProvider = DyamarkPanelProvider.INFO))
+    }
+
+    @Test
+    fun testProviderInfo() {
+        assertEquals("dyamark", DyamarkPanelProvider.INFO.name)
+        assertEquals(DyamarkPanelProvider::class.java.name, DyamarkPanelProvider.INFO.className)
+    }
 }

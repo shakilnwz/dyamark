@@ -272,7 +272,7 @@ Each step is tested before the next one starts.
 | 4 | The real provider and panel, the scheme handler, the JS queries | *Done.* Preview shows, follows typing, survives closing and reopening the tab, and is disposed (no leaked browsers in the IDE's JCEF list) |
 | 5 | Colours from the editor scheme, live | *Done.* Light and dark schemes, switched with a preview open; a diagram with its own `%%{init}%%` theme keeps it |
 | 6 | Scroll sync both ways, links, `E` | *Done.* Each link kind; `E` puts the caret on the fence's line; scroll sync on a long document |
-| 7 | The one-time notification and the Preview choice | Choosing dyamark, then JCEF again, swaps every open preview |
+| 7 | The one-time notification and the Preview choice | *Done.* Choosing dyamark, then JCEF again, swaps every open preview |
 | 8 | `bin/plugin`, the release workflow adds the zip, README, PLAN.md, screenshots in both schemes | The released zip installs into a clean PhpStorm |
 
 ## Time

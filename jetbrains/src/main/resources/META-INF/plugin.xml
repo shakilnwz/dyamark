@@ -17,8 +17,15 @@
   </extensions>
 
   <extensions defaultExtensionNs="com.intellij">
+    <notificationGroup id="Dyamark" displayType="BALLOON"/>
+    <postStartupActivity implementation="dyamark.jetbrains.DyamarkStartupActivity"/>
     <postStartupActivity implementation="dyamark.jetbrains.SpikeStartup"/>
   </extensions>
+
+  <projectListeners>
+    <listener class="dyamark.jetbrains.DyamarkNotificationListener"
+              topic="com.intellij.openapi.fileEditor.FileEditorManagerListener"/>
+  </projectListeners>
 
   <applicationListeners>
     <listener class="dyamark.jetbrains.DyamarkEditorColorsListener"
