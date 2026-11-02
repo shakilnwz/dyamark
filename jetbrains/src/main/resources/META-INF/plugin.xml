@@ -19,4 +19,21 @@
   <extensions defaultExtensionNs="com.intellij">
     <postStartupActivity implementation="dyamark.jetbrains.SpikeStartup"/>
   </extensions>
+
+  <actions>
+    <action id="dyamark.zoomIn" class="dyamark.jetbrains.ZoomInAction" text="Zoom In">
+      <keyboard-shortcut keymap="$default" first-keystroke="control EQUALS"/>
+      <keyboard-shortcut keymap="$default" first-keystroke="control ADD"/>
+      <keyboard-shortcut keymap="$default" first-keystroke="control shift EQUALS"/>
+    </action>
+    <action id="dyamark.zoomOut" class="dyamark.jetbrains.ZoomOutAction" text="Zoom Out">
+      <keyboard-shortcut keymap="$default" first-keystroke="control MINUS"/>
+      <keyboard-shortcut keymap="$default" first-keystroke="control SUBTRACT"/>
+      <keyboard-shortcut keymap="$default" first-keystroke="control shift MINUS"/>
+    </action>
+    <action id="dyamark.resetZoom" class="dyamark.jetbrains.ResetZoomAction" text="Reset Zoom">
+      <keyboard-shortcut keymap="$default" first-keystroke="control 0"/>
+      <keyboard-shortcut keymap="$default" first-keystroke="control NUMPAD0"/>
+    </action>
+  </actions>
 </idea-plugin>

@@ -17,6 +17,7 @@ import (
 	"dyamark/seq/parse"
 	"dyamark/viewer"
 
+	"gioui.org/f32"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -83,6 +84,8 @@ type Preview struct {
 	// topLine is the first line of the block at the top of the view, as
 	// last told or set.
 	topLine int
+
+	help bool
 }
 
 // New returns the preview of an empty document. shaper shapes its text,
@@ -281,15 +284,29 @@ func (p *Preview) scrollToLine(line int) {
 func (p *Preview) Layout(gtx layout.Context) layout.Dimensions {
 	p.runCalls()
 	for {
-		ev, ok := gtx.Event(pointer.Filter{Target: p, Kinds: pointer.Press})
+		ev, ok := gtx.Event(
+			pointer.Filter{Target: p, Kinds: pointer.Press},
+			key.Filter{Focus: p, Name: key.NameF1},
+			key.Filter{Focus: p, Name: "?", Optional: key.ModShift},
+			key.Filter{Name: key.NameF1},
+			key.Filter{Name: "?", Optional: key.ModShift},
+		)
 		if !ok {
 			break
 		}
-		if e, ok := ev.(pointer.Event); ok && e.Kind == pointer.Press {
-			// In a browser the keys go to Gio's hidden text field, which
-			// has the page's focus only while Gio shows text input. A
-			// click asks for it, so the keys typed after it arrive.
-			gtx.Execute(key.SoftKeyboardCmd{Show: true})
+		switch e := ev.(type) {
+		case pointer.Event:
+			if e.Kind == pointer.Press {
+				// In a browser the keys go to Gio's hidden text field, which
+				// has the page's focus only while Gio shows text input. A
+				// click asks for it, so the keys typed after it arrive.
+				gtx.Execute(key.SoftKeyboardCmd{Show: true})
+			}
+		case key.Event:
+			if e.State == key.Press {
+				p.help = true
+				gtx.Execute(op.InvalidateCmd{})
+			}
 		}
 	}
 	paint.FillShape(gtx.Ops, p.theme.Background, clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Op())
@@ -317,6 +334,10 @@ func (p *Preview) Layout(gtx layout.Context) layout.Dimensions {
 		gtx.Execute(op.InvalidateCmd{})
 	}
 
+	if p.help {
+		p.layoutHelp(gtx)
+	}
+
 	if !p.ready {
 		p.ready = true
 		p.host.Ready()
@@ -341,6 +362,54 @@ func (p *Preview) TopLine() int {
 // Viewing reports whether the viewer is open.
 func (p *Preview) Viewing() bool {
 	return p.viewing
+}
+
+// ZoomIn increases text size in the view, or zooms in the viewer.
+func (p *Preview) ZoomIn() {
+	p.post(func() {
+		if p.viewing {
+			p.viewer.ZoomBy(1.2, f32.Pt(0, 0))
+		} else {
+			p.view.ZoomTextIn()
+		}
+	})
+}
+
+// ZoomOut decreases text size in the view, or zooms out the viewer.
+func (p *Preview) ZoomOut() {
+	p.post(func() {
+		if p.viewing {
+			p.viewer.ZoomBy(1/1.2, f32.Pt(0, 0))
+		} else {
+			p.view.ZoomTextOut()
+		}
+	})
+}
+
+// ResetZoom resets text scale in the view.
+func (p *Preview) ResetZoom() {
+	p.post(func() {
+		if !p.viewing {
+			p.view.ResetTextZoom()
+		}
+	})
+}
+
+// ToggleHelp toggles the keys help overlay.
+func (p *Preview) ToggleHelp() {
+	p.post(func() {
+		p.help = !p.help
+	})
+}
+
+// Help reports whether the keys help overlay is open.
+func (p *Preview) Help() bool {
+	return p.help
+}
+
+// TextScale returns the view's current text zoom scale.
+func (p *Preview) TextScale() float32 {
+	return p.view.TextScale
 }
 
 // Colors is the palette the page sets, as JSON. Colours are "#rrggbb";

@@ -288,6 +288,16 @@ try {
     const redrawn = await page.next("drawn", mark);
     ok(redrawn, `drawn after an edit (${redrawn ? Math.round(redrawn.at - typed) : "-"} ms)`);
 
+    // 5b. Zoom and help functions work without errors.
+    await page.eval("dyamark.zoomIn()");
+    await page.eval("dyamark.zoomOut()");
+    await page.eval("dyamark.resetZoom()");
+    await page.eval("dyamark.toggleHelp()");
+    await page.settle();
+    await page.eval("dyamark.toggleHelp()");
+    await page.settle();
+    ok(true, "zoomIn, zoomOut, resetZoom and toggleHelp executed cleanly");
+
     const errors = page.messages.filter((m) => m.text.startsWith("error"));
     ok(errors.length === 0, `no errors${errors.length ? ": " + errors.map((m) => m.text).join("; ") : ""}`);
   } finally {

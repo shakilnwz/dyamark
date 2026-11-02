@@ -336,3 +336,73 @@ func TestSetThemeRefusesBadColors(t *testing.T) {
 		t.Error("a refused theme changed the palette")
 	}
 }
+
+// ZoomIn, ZoomOut, and ResetZoom scale text in the view.
+func TestZoom(t *testing.T) {
+	p, _, _, _, frame := testPreview(t)
+	p.SetSource("# Heading\n\nSome body text.\n")
+	frame()
+
+	initialScale := p.TextScale()
+	p.ZoomIn()
+	frame()
+	if got := p.TextScale(); got <= initialScale {
+		t.Errorf("ZoomIn didn't increase scale: got %v <= %v", got, initialScale)
+	}
+
+	p.ZoomOut()
+	frame()
+	if got := p.TextScale(); got != initialScale {
+		t.Errorf("ZoomOut didn't restore scale: got %v, want %v", got, initialScale)
+	}
+
+	p.ZoomOut()
+	frame()
+	if got := p.TextScale(); got >= initialScale {
+		t.Errorf("ZoomOut didn't decrease scale: got %v >= %v", got, initialScale)
+	}
+
+	p.ResetZoom()
+	frame()
+	if got := p.TextScale(); got != 1.0 {
+		t.Errorf("ResetZoom didn't reset scale to 1.0: got %v", got)
+	}
+}
+
+// ? and F1 toggle the help overlay; Esc or click closes it.
+func TestHelp(t *testing.T) {
+	p, _, _, r, frame := testPreview(t)
+	p.SetSource("# Doc\n")
+	frame()
+
+	if p.Help() {
+		t.Error("help is open at start")
+	}
+
+	p.ToggleHelp()
+	frame()
+	if !p.Help() {
+		t.Error("ToggleHelp didn't open help")
+	}
+
+	// Pressing Esc closes it.
+	r.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	frame()
+	if p.Help() {
+		t.Error("Esc didn't close help")
+	}
+
+	// Typing ? opens it.
+	r.Queue(key.Event{Name: "?", State: key.Press})
+	frame()
+	if !p.Help() {
+		t.Error("? didn't open help")
+	}
+
+	// Clicking closes it.
+	r.Queue(pointer.Event{Kind: pointer.Press, Position: f32.Pt(10, 10)})
+	frame()
+	if p.Help() {
+		t.Error("pointer press didn't close help")
+	}
+}

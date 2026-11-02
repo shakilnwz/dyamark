@@ -4,6 +4,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.wm.IdeFocusManager
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefBrowserBase
 import com.intellij.ui.jcef.JBCefJSQuery
@@ -12,7 +13,10 @@ import org.cef.browser.CefFrame
 import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.intellij.plugins.markdown.ui.preview.MarkdownHtmlPanel
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.nio.file.Path
+import java.util.concurrent.CopyOnWriteArrayList
 import javax.swing.JComponent
 
 private val LOG = logger<DyamarkPanel>()
@@ -29,11 +33,19 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
 
     private val lock = Any()
     private var ready = false
-    private var pending: String? = null
+    private var currentSource: String? = null
+    private val scrollListeners = CopyOnWriteArrayList<MarkdownHtmlPanel.ScrollListener>()
+    private var isPanelDisposed = false
 
     init {
         Disposer.register(this, browser)
         Disposer.register(this, query)
+
+        browser.component.putClientProperty(PANEL_CLIENT_PROPERTY, this)
+        (browser.cefBrowser.uiComponent as? JComponent)?.putClientProperty(PANEL_CLIENT_PROPERTY, this)
+
+        setupFocusOnMousePress()
+
         query.addHandler { message ->
             onMessage(message)
             null
@@ -48,13 +60,36 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
 
             override fun onLoadEnd(cef: CefBrowser, frame: CefFrame, httpStatusCode: Int) {
                 LOG.info("dyamark ${file?.name}: load end ${frame.url} $httpStatusCode main=${frame.isMain}")
-                if (!frame.isMain) return
+                if (!frame.isMain || isPanelDisposed || browser.isDisposed) return
+                synchronized(lock) {
+                    ready = false
+                }
                 val js = "window.dyamarkHostPost = function(m) { ${query.inject("m")} }; window.dyamarkHostReady();"
                 cef.executeJavaScript(js, WebResources.INDEX, 0)
             }
         }, browser.cefBrowser)
         browser.loadURL(WebResources.INDEX)
         Spike.panelCreated(this)
+    }
+
+    private fun setupFocusOnMousePress() {
+        val listener = object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                requestFocus()
+            }
+        }
+        browser.component.addMouseListener(listener)
+        browser.cefBrowser.uiComponent.addMouseListener(listener)
+    }
+
+    fun requestFocus() {
+        val ui = browser.cefBrowser.uiComponent
+        if (project != null && !project.isDisposed) {
+            IdeFocusManager.getInstance(project).requestFocus(ui, true)
+        } else {
+            IdeFocusManager.getGlobalInstance().requestFocus(ui, true)
+        }
+        browser.cefBrowser.setFocus(true)
     }
 
     override fun getComponent(): JComponent = browser.component
@@ -75,39 +110,90 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
 
     private fun push(html: String) {
         Spike.sourceSent(this)
+        val sendNow: Boolean
         synchronized(lock) {
-            if (!ready) {
-                pending = html
-                return
-            }
+            currentSource = html
+            sendNow = ready
         }
-        setSource(html)
+        if (sendNow) {
+            setSource(html)
+        }
     }
 
-    override fun reloadWithOffset(offset: Int) {}
+    fun zoomIn() {
+        executeJs("if (globalThis.dyamark?.zoomIn) dyamark.zoomIn();")
+    }
 
+    fun zoomOut() {
+        executeJs("if (globalThis.dyamark?.zoomOut) dyamark.zoomOut();")
+    }
+
+    fun resetZoom() {
+        executeJs("if (globalThis.dyamark?.resetZoom) dyamark.resetZoom();")
+    }
+
+    private fun executeJs(code: String) {
+        if (!browser.isDisposed && !isPanelDisposed) {
+            browser.cefBrowser.executeJavaScript(code, WebResources.INDEX, 0)
+        }
+    }
+
+    override fun reloadWithOffset(offset: Int) {
+        if (!browser.isDisposed && !isPanelDisposed) {
+            browser.cefBrowser.reload()
+        }
+    }
+
+    @Deprecated("Deprecated in MarkdownHtmlPanel", ReplaceWith(""))
+    @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION")
     override fun scrollToMarkdownSrcOffset(offset: Int, smooth: Boolean) {}
 
-    override fun addScrollListener(listener: MarkdownHtmlPanel.ScrollListener) {}
+    override fun addScrollListener(listener: MarkdownHtmlPanel.ScrollListener) {
+        scrollListeners.add(listener)
+    }
 
-    override fun removeScrollListener(listener: MarkdownHtmlPanel.ScrollListener) {}
+    override fun removeScrollListener(listener: MarkdownHtmlPanel.ScrollListener) {
+        scrollListeners.remove(listener)
+    }
 
-    override fun dispose() {}
+    override fun dispose() {
+        LOG.info("dyamark ${file?.name}: disposed")
+        isPanelDisposed = true
+        if (!query.isDisposed) {
+            Disposer.dispose(query)
+        }
+        if (!browser.isDisposed) {
+            Disposer.dispose(browser)
+        }
+    }
 
     private fun setSource(text: String) {
-        browser.cefBrowser.executeJavaScript("dyamark.setSource(${jsString(text)})", WebResources.INDEX, 0)
+        executeJs("dyamark.setSource(${jsString(text)})")
     }
 
     private fun onMessage(message: String) {
+        if (isPanelDisposed || browser.isDisposed) return
         LOG.info("dyamark ${file?.name}: $message")
-        if (message.startsWith("ready")) {
-            val text = synchronized(lock) {
-                ready = true
-                pending.also { pending = null }
+        when {
+            message.startsWith("ready") -> {
+                val text = synchronized(lock) {
+                    ready = true
+                    currentSource
+                }
+                if (text != null) setSource(text)
             }
-            if (text != null) setSource(text)
+            message.startsWith("error ") -> {
+                LOG.warn("dyamark ${file?.name}: ${message.removePrefix("error ")}")
+            }
+            message.startsWith("log ") -> {
+                LOG.info("dyamark ${file?.name}: ${message.removePrefix("log ")}")
+            }
         }
         Spike.message(this, message)
+    }
+
+    companion object {
+        const val PANEL_CLIENT_PROPERTY = "dyamark.panel"
     }
 }
 

@@ -59,6 +59,22 @@ func main() {
 			}
 			return nil
 		}),
+		"zoomIn": js.FuncOf(func(_ js.Value, _ []js.Value) any {
+			p.ZoomIn()
+			return nil
+		}),
+		"zoomOut": js.FuncOf(func(_ js.Value, _ []js.Value) any {
+			p.ZoomOut()
+			return nil
+		}),
+		"resetZoom": js.FuncOf(func(_ js.Value, _ []js.Value) any {
+			p.ResetZoom()
+			return nil
+		}),
+		"toggleHelp": js.FuncOf(func(_ js.Value, _ []js.Value) any {
+			p.ToggleHelp()
+			return nil
+		}),
 	}))
 	go run(w, p)
 	app.Main()
