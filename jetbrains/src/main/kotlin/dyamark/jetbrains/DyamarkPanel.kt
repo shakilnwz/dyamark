@@ -69,6 +69,7 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
             }
         }, browser.cefBrowser)
         browser.loadURL(WebResources.INDEX)
+        ThemeBridge.register(this)
         Spike.panelCreated(this)
     }
 
@@ -159,12 +160,17 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
     override fun dispose() {
         LOG.info("dyamark ${file?.name}: disposed")
         isPanelDisposed = true
+        ThemeBridge.unregister(this)
         if (!query.isDisposed) {
             Disposer.dispose(query)
         }
         if (!browser.isDisposed) {
             Disposer.dispose(browser)
         }
+    }
+
+    fun setTheme(json: String) {
+        executeJs("if (globalThis.dyamark?.setTheme) dyamark.setTheme(${jsString(json)});")
     }
 
     private fun setSource(text: String) {
@@ -180,6 +186,7 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
                     ready = true
                     currentSource
                 }
+                setTheme(ThemeBridge.currentThemeJson())
                 if (text != null) setSource(text)
             }
             message.startsWith("error ") -> {

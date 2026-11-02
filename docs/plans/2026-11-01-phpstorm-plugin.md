@@ -1,6 +1,6 @@
 # Plan: a PhpStorm plugin that draws Markdown previews with dyamark
 
-Date: 2026-11-02. Status: steps 1 to 4 done. Step 5 is next.
+Date: 2026-11-02. Status: steps 1 to 5 done. Step 6 is next.
 
 ## Goal
 
@@ -270,7 +270,7 @@ Each step is tested before the next one starts.
 | 2 | Move `palette/` and `viewer/` out of `app/` | `bin/test` passes unchanged; the app looks and works the same |
 | 3 | `web/` and `cmd/dyamark-web/`, `bin/wasm` | Native tests of `web/` with a fake `Host`: calls before ready, debounce, `scrollToLine`, `editLine` from the viewer. A headless Chromium page loads the wasm, pushes a document and checks a screenshot |
 | 4 | The real provider and panel, the scheme handler, the JS queries | *Done.* Preview shows, follows typing, survives closing and reopening the tab, and is disposed (no leaked browsers in the IDE's JCEF list) |
-| 5 | Colours from the editor scheme, live | Light and dark schemes, switched with a preview open; a diagram with its own `%%{init}%%` theme keeps it |
+| 5 | Colours from the editor scheme, live | *Done.* Light and dark schemes, switched with a preview open; a diagram with its own `%%{init}%%` theme keeps it |
 | 6 | Scroll sync both ways, links, `E` | Each link kind; `E` puts the caret on the fence's line; scroll sync on a long document |
 | 7 | The one-time notification and the Preview choice | Choosing dyamark, then JCEF again, swaps every open preview |
 | 8 | `bin/plugin`, the release workflow adds the zip, README, PLAN.md, screenshots in both schemes | The released zip installs into a clean PhpStorm |

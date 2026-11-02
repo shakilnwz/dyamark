@@ -337,6 +337,67 @@ func TestSetThemeRefusesBadColors(t *testing.T) {
 	}
 }
 
+// Live theme switches update view colors and derived sequence themes while
+// preserving diagrams with an explicit %%{init}%% theme.
+func TestLiveThemeSwitch(t *testing.T) {
+	p, _, _, _, frame := testPreview(t)
+	doc := "# Test\n\n" +
+		fence + "mermaid\nsequenceDiagram\nAlice->>Bob: Hello\n" + fence + "\n\n" +
+		fence + "mermaid\n%%{init: {'theme': 'forest'}}%%\nsequenceDiagram\nAlice->>Bob: Hi\n" + fence + "\n"
+
+	p.SetSource(doc)
+	frame()
+
+	if len(p.doc.Sequences) != 2 {
+		t.Fatalf("expected 2 sequence diagrams, got %d", len(p.doc.Sequences))
+	}
+
+	darkBg := p.theme.Background
+	s1 := p.doc.Sequences[0]
+	s2 := p.doc.Sequences[1]
+
+	th1Dark := seq.ResolveTheme(p.mdTheme.Seq, s1.AST.Config.Theme, s1.AST.Config.ThemeVariables)
+	th2Dark := seq.ResolveTheme(p.mdTheme.Seq, s2.AST.Config.Theme, s2.AST.Config.ThemeVariables)
+
+	if th1Dark != p.mdTheme.Seq {
+		t.Error("first diagram without init theme should use base sequence theme")
+	}
+	forestTheme := seq.ResolveTheme(p.mdTheme.Seq, "forest", nil)
+	if th2Dark.ActorBkg != forestTheme.ActorBkg {
+		t.Errorf("second diagram should have forest theme actor background %v, got %v", forestTheme.ActorBkg, th2Dark.ActorBkg)
+	}
+
+	// Switch to light theme live.
+	lightJSON := `{"background":"#ffffff","foreground":"#1a1a1a","accent":"#0055ff","error":"#ff0000"}`
+	if err := p.SetTheme(lightJSON); err != nil {
+		t.Fatalf("SetTheme failed: %v", err)
+	}
+	frame()
+
+	if p.theme.Background == darkBg {
+		t.Error("background did not change after live theme switch")
+	}
+	if p.theme.Background != seq.HexColor("#ffffff", 255) {
+		t.Errorf("expected background #ffffff, got %v", p.theme.Background)
+	}
+
+	th1Light := seq.ResolveTheme(p.mdTheme.Seq, s1.AST.Config.Theme, s1.AST.Config.ThemeVariables)
+	th2Light := seq.ResolveTheme(p.mdTheme.Seq, s2.AST.Config.Theme, s2.AST.Config.ThemeVariables)
+
+	// Diagram 1 updated its theme to match the new light palette.
+	if th1Light == th1Dark {
+		t.Error("diagram 1 theme should have updated with scheme switch")
+	}
+	if th1Light != p.mdTheme.Seq {
+		t.Error("diagram 1 should match the new base sequence theme")
+	}
+
+	// Diagram 2 retained its forest theme.
+	if th2Light.ActorBkg != forestTheme.ActorBkg {
+		t.Errorf("diagram 2 should have retained forest theme actor background %v, got %v", forestTheme.ActorBkg, th2Light.ActorBkg)
+	}
+}
+
 // ZoomIn, ZoomOut, and ResetZoom scale text in the view.
 func TestZoom(t *testing.T) {
 	p, _, _, _, frame := testPreview(t)

@@ -20,6 +20,13 @@
     <postStartupActivity implementation="dyamark.jetbrains.SpikeStartup"/>
   </extensions>
 
+  <applicationListeners>
+    <listener class="dyamark.jetbrains.DyamarkEditorColorsListener"
+              topic="com.intellij.openapi.editor.colors.EditorColorsListener"/>
+    <listener class="dyamark.jetbrains.DyamarkLafListener"
+              topic="com.intellij.ide.ui.LafManagerListener"/>
+  </applicationListeners>
+
   <actions>
     <action id="dyamark.zoomIn" class="dyamark.jetbrains.ZoomInAction" text="Zoom In">
       <keyboard-shortcut keymap="$default" first-keystroke="control EQUALS"/>

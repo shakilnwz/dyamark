@@ -298,6 +298,13 @@ try {
     await page.settle();
     ok(true, "zoomIn, zoomOut, resetZoom and toggleHelp executed cleanly");
 
+    // 5c. Live theme switch: preview adapts colors live with document open.
+    const darkTheme = { background: "#111827", foreground: "#f3f4f6", accent: "#3b82f6" };
+    await page.eval(`dyamark.setTheme(${JSON.stringify(JSON.stringify(darkTheme))})`);
+    await page.settle();
+    const darkShot = await page.eval(countColors([darkTheme.background]));
+    ok(darkShot.near[0] > (darkShot.width * darkShot.height) / 2, "live theme switch updates background color");
+
     const errors = page.messages.filter((m) => m.text.startsWith("error"));
     ok(errors.length === 0, `no errors${errors.length ? ": " + errors.map((m) => m.text).join("; ") : ""}`);
   } finally {
