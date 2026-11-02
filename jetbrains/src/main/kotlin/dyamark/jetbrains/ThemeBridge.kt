@@ -30,6 +30,9 @@ object ThemeBridge {
         panels.remove(panel)
     }
 
+    /** The panels not disposed yet. */
+    internal fun openPanels(): List<DyamarkPanel> = panels.toList()
+
     fun updateAll() {
         val json = currentThemeJson()
         LOG.info("dyamark: editor scheme changed; updating ${panels.size} open preview(s)")

@@ -62,13 +62,29 @@ val runIdeArgs = buildList {
     add("-Dide.show.tips.on.startup.default.value=false")
     add("-Didea.initially.ask.config=never")
     if (providers.gradleProperty("spike").isPresent) add("-Ddyamark.spike=true")
+    if (providers.gradleProperty("check").isPresent) add("-Ddyamark.check=true")
     if (providers.gradleProperty("noGpu").isPresent) add("-Dide.browser.jcef.gpu.disable=true")
     providers.gradleProperty("devtoolsPort").orNull?.let { add("-Dide.browser.jcef.debug.port=$it") }
     providers.gradleProperty("jcefArgs").orNull?.let { add("-Dide.browser.jcef.extra.args=$it") }
 }
 val spikeProject = providers.gradleProperty("spikeProject").orNull
 
+// Check runs: -Pcheck opens a fresh copy of check/ and checks the plugin
+// in the IDE (Check.kt). The results go to dyamark-check.txt, beside the
+// sandbox's idea.log, and the IDE quits when they're done.
+val checkRun = providers.gradleProperty("check").isPresent
+val checkProject = layout.buildDirectory.dir("check-project")
+val prepareCheckProject = tasks.register<Sync>("prepareCheckProject") {
+    from(layout.projectDirectory.dir("check"))
+    into(checkProject)
+}
+
 tasks.runIde {
     jvmArgs(runIdeArgs)
-    if (spikeProject != null) args(spikeProject)
+    if (checkRun) {
+        dependsOn(prepareCheckProject)
+        args(checkProject.get().asFile.absolutePath)
+    } else if (spikeProject != null) {
+        args(spikeProject)
+    }
 }

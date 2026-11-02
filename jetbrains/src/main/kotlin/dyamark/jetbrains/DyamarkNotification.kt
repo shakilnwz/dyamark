@@ -101,7 +101,7 @@ class DyamarkNotificationListener : FileEditorManagerListener {
  */
 class DyamarkStartupActivity : ProjectActivity {
     override suspend fun execute(project: Project) {
-        if (Spike.enabled) return
+        if (Spike.enabled || Check.enabled) return
         ApplicationManager.getApplication().invokeLater {
             if (project.isDisposed) return@invokeLater
             val manager = FileEditorManager.getInstance(project)

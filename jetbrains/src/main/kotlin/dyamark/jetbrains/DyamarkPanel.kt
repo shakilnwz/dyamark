@@ -4,7 +4,9 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
@@ -20,12 +22,14 @@ import org.cef.browser.CefFrame
 import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.intellij.plugins.markdown.ui.preview.accessor.MarkdownLinkOpener
+import org.intellij.plugins.markdown.ui.preview.MarkdownEditorWithPreview
 import org.intellij.plugins.markdown.ui.preview.MarkdownHtmlPanel
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.swing.JComponent
+import javax.swing.SwingUtilities
 
 private val LOG = logger<DyamarkPanel>()
 
@@ -45,8 +49,17 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
     private var currentFile: VirtualFile? = file
     private var currentPath: Path? = runCatching { file?.toNioPath() }.getOrNull()
     private var pendingScrollLine: Int? = null
+    // The Markdown plugin hands every setHtml the caret's offset; like its
+    // JCEF panel, only the first one places the view.
+    private var firstUpdate = true
     private val scrollListeners = CopyOnWriteArrayList<MarkdownHtmlPanel.ScrollListener>()
     private var isPanelDisposed = false
+
+    // Until then (System.nanoTime), the editor scrolls this panel asks for
+    // aren't sent back to the preview: it is already there, and putting
+    // the block's start at the top would undo the reader's scrolling.
+    @Volatile
+    private var ignoreEditorScrollUntil = 0L
 
     init {
         Disposer.register(this, browser)
@@ -108,6 +121,11 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
 
     internal val cefBrowser get() = browser.cefBrowser
 
+    // For Check.
+    internal val uiForCheck: JComponent get() = browser.cefBrowser.uiComponent as JComponent
+    internal val disposedForCheck get() = isPanelDisposed
+    internal val browserDisposedForCheck get() = browser.isDisposed
+
     override fun getProject(): Project? = project
 
     override fun getVirtualFile(): VirtualFile? = file
@@ -135,8 +153,11 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
         synchronized(lock) {
             currentSource = html
             sendNow = ready
-            if (initialScrollOffset > 0) {
-                pendingScrollLine = offsetToLine(initialScrollOffset)
+            if (firstUpdate) {
+                firstUpdate = false
+                if (initialScrollOffset > 0) {
+                    pendingScrollLine = offsetToLine(initialScrollOffset)
+                }
             }
             scrollLine = if (sendNow) pendingScrollLine else null
             if (sendNow) {
@@ -171,6 +192,11 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
 
     override fun reloadWithOffset(offset: Int) {
         if (!browser.isDisposed && !isPanelDisposed) {
+            // The source and this line are sent again on the reloaded
+            // page's ready.
+            synchronized(lock) {
+                pendingScrollLine = offsetToLine(offset)
+            }
             browser.cefBrowser.reload()
         }
     }
@@ -182,7 +208,9 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
         scrollToLine(line)
     }
 
+    /** The editor scrolled, with "synchronise scrolling" on: [line] is its top line, 0-based. */
     override suspend fun scrollTo(editor: Editor, line: Int) {
+        if (System.nanoTime() < ignoreEditorScrollUntil) return
         scrollToLine(line + 1)
     }
 
@@ -197,8 +225,45 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
             }
         }
         if (sendNow) {
+            Check.event(this, "out scrollToLine $line")
             executeJs("if (globalThis.dyamark?.scrollToLine) dyamark.scrollToLine($line);")
         }
+    }
+
+    /**
+     * The reader scrolled the preview so that [line], 1-based, starts the
+     * block at its top. The Markdown plugin only syncs from the editor to
+     * the preview (nothing in 2026.2 listens to a panel's
+     * [MarkdownHtmlPanel.ScrollListener]s), so the panel scrolls its
+     * editor itself, when that editor's "synchronise scrolling" is on.
+     */
+    private fun previewScrolled(line: Int) {
+        val split = splitEditor()
+        if (split != null && split.isAutoScrollPreview) {
+            val editor = split.editor
+            val lineIndex = (line - 1).coerceIn(0, maxOf(editor.document.lineCount - 1, 0))
+            val y = editor.logicalPositionToXY(LogicalPosition(lineIndex, 0)).y
+            ignoreEditorScrollUntil = System.nanoTime() + ECHO_NANOS
+            val scrolling = editor.scrollingModel
+            scrolling.disableAnimation()
+            scrolling.scrollVertically(y)
+            scrolling.enableAnimation()
+            Check.event(this, "editor scrolled to ${lineIndex + 1}")
+        }
+        val offset = lineToOffset(line) ?: 0
+        for (listener in scrollListeners) {
+            listener.onScroll(offset)
+        }
+    }
+
+    /** The split editor showing this preview, if it is in one. */
+    private fun splitEditor(): MarkdownEditorWithPreview? {
+        val p = project ?: return null
+        val f = currentFile ?: file ?: return null
+        if (p.isDisposed) return null
+        return FileEditorManager.getInstance(p).getAllEditors(f)
+            .filterIsInstance<MarkdownEditorWithPreview>()
+            .firstOrNull { SwingUtilities.isDescendingFrom(browser.component, it.component) }
     }
 
     fun offsetToLine(offset: Int): Int? {
@@ -244,10 +309,12 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
     }
 
     fun setTheme(json: String) {
+        Check.event(this, "out setTheme $json")
         executeJs("if (globalThis.dyamark?.setTheme) dyamark.setTheme(${jsString(json)});")
     }
 
     private fun setSource(text: String) {
+        Check.event(this, "out setSource")
         executeJs("dyamark.setSource(${jsString(text)})")
     }
 
@@ -316,12 +383,8 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
             message.startsWith("scroll ") -> {
                 val line = message.removePrefix("scroll ").trim().toIntOrNull()
                 if (line != null && line > 0) {
-                    val offset = lineToOffset(line) ?: 0
                     ApplicationManager.getApplication().invokeLater {
-                        if (isPanelDisposed) return@invokeLater
-                        for (listener in scrollListeners) {
-                            listener.onScroll(offset)
-                        }
+                        if (!isPanelDisposed) previewScrolled(line)
                     }
                 }
             }
@@ -335,6 +398,11 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
                         if (p.isDisposed || !f.isValid) return@invokeLater
                         val lineIndex = (line - 1).coerceAtLeast(0)
                         OpenFileDescriptor(p, f, lineIndex, 0).navigate(true)
+                        // With the file open in this split editor, navigate
+                        // moves the caret but leaves the focus in the preview.
+                        val editor = splitEditor()?.editor ?: return@invokeLater
+                        browser.cefBrowser.setFocus(false)
+                        IdeFocusManager.getInstance(p).requestFocus(editor.contentComponent, true)
                     }
                 }
             }
@@ -352,10 +420,15 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
             }
         }
         Spike.message(this, message)
+        Check.event(this, "in $message")
     }
 
     companion object {
         const val PANEL_CLIENT_PROPERTY = "dyamark.panel"
+
+        // How long after the panel scrolls its editor that editor's
+        // scrolls aren't sent back.
+        private const val ECHO_NANOS = 500_000_000L
     }
 }
 

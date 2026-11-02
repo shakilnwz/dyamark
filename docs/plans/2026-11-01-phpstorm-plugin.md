@@ -1,6 +1,9 @@
 # Plan: a PhpStorm plugin that draws Markdown previews with dyamark
 
-Date: 2026-11-02. Status: steps 1 to 5 done. Step 6 is next.
+Date: 2026-11-02. Status: steps 1 to 8 done. Steps 4 to 7 checked in
+PhpStorm with `./gradlew runIde -Pcheck` (see "Checked in PhpStorm").
+Not checked yet: the zip installed into a clean PhpStorm, and the
+release workflow, which runs on the next tag.
 
 ## Goal
 
@@ -128,6 +131,49 @@ raw Markdown.
   `.intellijPlatform/sandbox/…/config_runIde/` (gitignored), or it opens
   on a modal licence dialog.
 
+## Checked in PhpStorm (2026-11-02)
+
+Steps 4 to 7 were first marked done without a run in the IDE. Their
+checks are now automated: `./gradlew runIde -Pcheck` (from `jetbrains/`)
+opens a fresh copy of `jetbrains/check/` in the sandbox, works the
+IDE and the preview the way a reader would (`Check.kt`), and quits. Each
+result goes to `dyamark-check.txt` beside the sandbox's `idea.log`, with
+screenshots. It needs the IDE's window to stay the active one: keys and
+focus go nowhere while another window has the desktop's focus, and the
+check says so instead of failing.
+
+All 33 checks pass on PhpStorm 2026.2.4: the preview shows, follows
+typing and goes with its tab (no live panel or browser left); light and
+dark schemes give the page, link and diagram colours, and a diagram's own
+`%%{init}%%` `actorBkg` stays; typing far below the view doesn't move it;
+the editor and the preview each scroll the other, without echo; a
+`#anchor` link scrolls to its heading and the editor follows; a relative
+link opens the file in the IDE; `E` in the viewer puts the caret on the
+diagram's first line and focuses the editor; choosing the Chromium
+preview, then dyamark from the notification, swaps the open previews;
+the notification shows once. Not run: a web link, which would open the
+desktop's browser.
+
+What the run found and changed:
+
+- **The view jumped to the caret on every keystroke.** The Markdown
+  plugin hands every `setHtml` the caret's offset (its log:
+  `setContent length: 6508, offset: 4245, line: 120`), and the panel
+  scrolled to it each time. Now only the first one does, as in the JCEF
+  panel.
+- **Scrolling the preview didn't move the editor.** Nothing in 2026.2
+  adds a panel `ScrollListener`, so the panel scrolls the editor itself.
+- **`#anchor` links went to the IDE**, which moves the editor rather
+  than the preview. dyamark now scrolls to the heading.
+- **`E` left the focus in the preview.** The caret moved, but
+  `navigate(true)` kept the browser focused; the panel now hands the
+  focus to the editor.
+- **Choosing a preview didn't swap the open ones**, from Settings or
+  from the notification: the IDE's own quirk, worked around by
+  `DyamarkProviderSwitchListener`.
+- A colour scheme change rebuilds the preview: the Markdown plugin
+  disposes the panel and makes a new one.
+
 ## Decisions
 
 - **The IDE edits, dyamark draws.** The wasm build has no editor,
@@ -228,34 +274,54 @@ raw Markdown.
 
 - `plugin.xml`: depends on `org.intellij.plugins.markdown`. Registers
   `<html.panel.provider>` in the `org.intellij.markdown` namespace, plus
-  the notification and the settings hook.
+  the notification, the scheme listeners, the zoom actions and
+  `DyamarkProviderSwitchListener` (below).
 - `DyamarkPanelProvider : MarkdownHtmlPanelProvider`. Its name is
   `dyamark`. It's available when `JBCefApp.isSupported()`, and keeps
   the default source text preprocessor, so it is given raw Markdown.
 - `DyamarkPanel : MarkdownHtmlPanel`, one per preview:
-  - A `JBCefBrowser` that loads `https://dyamark/index.html`. A
-    `JBCefCustomSchemeHandlerFactory` serves that from the plugin jar,
-    with `application/wasm` for the binary, so
-    `instantiateStreaming` works.
+  - A `JBCefBrowser` that loads `https://dyamark.local/index.html`. A
+    per-browser `CefRequestHandler` (`WebResources`) serves that from the
+    plugin jar, with `application/wasm` for the binary, so
+    `instantiateStreaming` works, and refuses every other request.
   - `setHtml(text, offset, path)` sends `setSource` with the text
     JSON-escaped. Until `ready`, only the newest text is kept; it is sent
-    again on every `ready`, in case the page reloaded.
-  - `scrollToMarkdownSrcOffset(offset)` turns the offset into a line
-    with the document, then sends `scrollToLine`. `scroll LINE` from
-    dyamark tells the panel's `ScrollListener`s, so "synchronise
-    scrolling" works both ways.
-  - `edit LINE` opens the file at that line (`OpenFileDescriptor`)
-    and focuses the editor.
-  - `link URL`: `BrowserUtil.browse` for the web, the IDE for
-    files, relative to `documentPath`.
+    again on every `ready`, in case the page reloaded. The Markdown
+    plugin passes the caret's offset with every update; like its JCEF
+    panel, only the first one places the view.
+  - Editor to preview: the split editor's visible-area listener calls
+    `scrollTo(editor, line)` (the replacement for the deprecated
+    `scrollToMarkdownSrcOffset`), which sends `scrollToLine`.
+  - Preview to editor: nothing in 2026.2 listens to a panel's
+    `ScrollListener`s, so on `scroll LINE` the panel scrolls its own
+    split editor, when that editor's "synchronise scrolling" is on, and
+    ignores that editor's scrolling for 0.5 s so it isn't sent back.
+    It still tells its `ScrollListener`s.
+  - `edit LINE` opens the file at that line (`OpenFileDescriptor`), then
+    takes the focus from the browser and gives it to the editor, which
+    `navigate` alone doesn't when the file is open beside the preview.
+  - `link URL`: `BrowserUtil.browse` for the web, the IDE's
+    `MarkdownLinkOpener` for the rest. `#anchor` links never get here:
+    dyamark scrolls to the heading itself (GitHub's heading slugs, in
+    `markdown.ParsedDocument.Anchor`), as the reader's own scrolling, so
+    the editor follows.
   - Disposes its browser and JS queries with the panel.
 - `ThemeBridge` reads the global editor scheme and sends `setTheme` to
-  every open panel when the scheme or the look and feel changes.
+  every open panel when the scheme or the look and feel changes. A
+  scheme change also makes the Markdown plugin build a new preview,
+  which gets the colours on `ready`.
+- `DyamarkProviderSwitchListener`: in 2026.2 a preview editor rebuilds
+  its panel on a settings change only when the provider it used last is
+  the one chosen now, and then notes the chosen one. So choosing another
+  preview, in Settings or from the notification, leaves the open previews
+  as they were until some other Markdown setting changes. The listener
+  sees the provider change and tells the settings listeners once more,
+  with nothing changed, which swaps them.
 - Build: Gradle with the IntelliJ Platform Gradle Plugin 2.x, against the
   local `/opt/phpstorm` so there's no SDK download. It needs a JDK 25:
   `mise use java@25`, or PhpStorm's bundled JBR, which has `javac`.
-- `bin/plugin` runs `bin/wasm`, copies `build/web/` into the plugin's
-  resources, and runs `./gradlew buildPlugin`. The result is
+- `bin/plugin` runs `bin/wasm` and `./gradlew buildPlugin`, whose
+  `processResources` puts `build/web/` into the jar under `web/`. The result is
   `build/dyamark-jetbrains-<version>.zip`, installed with *Settings ›
   Plugins › ⚙ › Install Plugin from Disk*. Its version comes from
   `git describe`, like the package's.
@@ -271,9 +337,9 @@ Each step is tested before the next one starts.
 | 3 | `web/` and `cmd/dyamark-web/`, `bin/wasm` | Native tests of `web/` with a fake `Host`: calls before ready, debounce, `scrollToLine`, `editLine` from the viewer. A headless Chromium page loads the wasm, pushes a document and checks a screenshot |
 | 4 | The real provider and panel, the scheme handler, the JS queries | *Done.* Preview shows, follows typing, survives closing and reopening the tab, and is disposed (no leaked browsers in the IDE's JCEF list) |
 | 5 | Colours from the editor scheme, live | *Done.* Light and dark schemes, switched with a preview open; a diagram with its own `%%{init}%%` theme keeps it |
-| 6 | Scroll sync both ways, links, `E` | *Done.* Each link kind; `E` puts the caret on the fence's line; scroll sync on a long document |
+| 6 | Scroll sync both ways, links, `E` | *Done.* Each link kind but the web one; `E` puts the caret on the diagram's first line and focuses the editor; scroll sync on a long document |
 | 7 | The one-time notification and the Preview choice | *Done.* Choosing dyamark, then JCEF again, swaps every open preview |
-| 8 | `bin/plugin`, the release workflow adds the zip, README, PLAN.md, screenshots in both schemes | *Done.* The released zip installs into a clean PhpStorm |
+| 8 | `bin/plugin`, the release workflow adds the zip, README, PLAN.md, screenshots in both schemes | *Done:* the zip builds and the screenshots are from PhpStorm. *Not checked:* the zip installed into a clean PhpStorm, and the workflow, until the next tag |
 
 ## Time
 

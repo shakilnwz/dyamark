@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"strings"
 	"sync"
 
 	"dyamark/markdown"
@@ -106,7 +107,13 @@ func New(host Host, shaper *text.Shaper, invalidate func()) *Preview {
 	}
 	p.setTheme(palette.Default(defaultRounding))
 
-	p.view.OnOpenLink = host.OpenLink
+	p.view.OnOpenLink = func(url string) {
+		if fragment, ok := strings.CutPrefix(url, "#"); ok {
+			p.scrollToAnchor(fragment)
+			return
+		}
+		host.OpenLink(url)
+	}
 	p.view.OnEditLine = host.EditLine
 	p.view.OnOpenViewer = p.openViewer
 	// No mmdc in a browser: other Mermaid diagrams show their source.
@@ -277,6 +284,19 @@ func (p *Preview) scrollToLine(line int) {
 	}
 	p.view.List.Position = layout.Position{First: i}
 	p.moved = true
+}
+
+// scrollToAnchor puts the heading a link's fragment names at the top of
+// the view. Unlike ScrollToLine, it is the reader's own scrolling, so the
+// IDE is told and its editor can follow.
+func (p *Preview) scrollToAnchor(fragment string) {
+	i := p.doc.Anchor(fragment)
+	if i < 0 {
+		p.host.Log("no heading for #" + fragment)
+		return
+	}
+	p.view.List.Position = layout.Position{First: i}
+	p.invalidate()
 }
 
 // Layout runs the calls queued since the last frame and lays out the

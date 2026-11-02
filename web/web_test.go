@@ -260,6 +260,34 @@ func TestViewTellsLinksAndEdits(t *testing.T) {
 	}
 }
 
+// A link to a heading in the page scrolls the view there itself, and tells
+// it as scrolling, so the editor can follow; it isn't a link for the IDE.
+func TestAnchorLinkScrollsTheView(t *testing.T) {
+	p, host, _, _, frame := testPreview(t)
+	// Section i's heading is on line 4i+3, after the two lines of the link.
+	p.SetSource("[the end](#section-15)\n\n" + longDoc(20))
+	frame()
+	host.take()
+
+	p.view.OnOpenLink("#section-15")
+	frame()
+	if got := p.TopLine(); got != 63 {
+		t.Errorf("#section-15 put line %d at the top, want 63", got)
+	}
+	if got, want := host.take(), []string{"scroll 63"}; !slices.Equal(got, want) {
+		t.Errorf("#section-15 told %q, want %q", got, want)
+	}
+
+	p.view.OnOpenLink("#no-such-heading")
+	frame()
+	if got := p.TopLine(); got != 63 {
+		t.Errorf("a missing heading moved the view to line %d", got)
+	}
+	if got, want := host.take(), []string{"log no heading for #no-such-heading"}; !slices.Equal(got, want) {
+		t.Errorf("a missing heading told %q, want %q", got, want)
+	}
+}
+
 // A click gives the keys somewhere to go: it asks Gio to show text input,
 // which in a browser focuses its hidden text field. On a diagram too.
 func TestClickOpensTextInput(t *testing.T) {

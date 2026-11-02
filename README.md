@@ -41,19 +41,21 @@ be saved.
 
 ## JetBrains Plugin (PhpStorm, IntelliJ IDEA)
 
-dyamark is also available as a Markdown preview provider plugin for JetBrains IDEs (PhpStorm 2026.2+ and IntelliJ Platform):
+dyamark is also available as a Markdown preview provider plugin for PhpStorm 2026.2 (build 262). It should work in other IntelliJ-based IDEs of that build with the bundled Markdown plugin, but only PhpStorm is tested:
 
 - **Faithful Mermaid Sequence Diagrams**: renders sequence diagrams natively using dyamark compiled to WebAssembly.
-- **Interactive Diagram Viewer**: click any diagram or press `Tab` / `Enter` to open the fullscreen diagram viewer with pan, zoom, fit, and participant isolation. Press `E` in the viewer to jump the IDE editor caret directly to the diagram's source fence line.
+- **Interactive Diagram Viewer**: click any diagram or press `Tab` / `Enter` to open the fullscreen diagram viewer with pan, zoom, fit, and participant isolation. Press `E` in the viewer to put the IDE editor's caret on the first line of the diagram's source.
 - **Live Theme Derivation**: automatically derives its palette from the active editor color scheme, updating live on light/dark scheme switches.
-- **Bidirectional Scroll Sync**: scrolling either the Markdown editor or the preview keeps both synchronized.
-- **Link Navigation**: opens web URLs in your browser and relative file links in the IDE.
+- **Bidirectional Scroll Sync**: with the split editor's synchronised scrolling on, scrolling the editor scrolls the preview, and scrolling the preview scrolls the editor.
+- **Link Navigation**: opens web URLs in your browser and relative file links in the IDE; `#heading` links scroll the preview to the heading.
 
 ### Installation
 
 1. Download `dyamark-jetbrains-<version>.zip` from GitHub Releases (or build locally with `./bin/plugin`).
 2. In PhpStorm / IntelliJ IDEA, open **Settings › Plugins › ⚙ › Install Plugin from Disk...** and choose the zip.
 3. Open any Markdown file and click **Use Dyamark** on the one-time notification, or pick **dyamark** under **Settings › Languages & Frameworks › Markdown › Preview**.
+
+PhpStorm 2026.2 with its Light and Dark editor schemes, the editor on the left and dyamark's preview on the right:
 
 | Light Scheme | Dark Scheme |
 |---|---|

@@ -20,11 +20,14 @@
     <notificationGroup id="Dyamark" displayType="BALLOON"/>
     <postStartupActivity implementation="dyamark.jetbrains.DyamarkStartupActivity"/>
     <postStartupActivity implementation="dyamark.jetbrains.SpikeStartup"/>
+    <postStartupActivity implementation="dyamark.jetbrains.CheckStartup"/>
   </extensions>
 
   <projectListeners>
     <listener class="dyamark.jetbrains.DyamarkNotificationListener"
               topic="com.intellij.openapi.fileEditor.FileEditorManagerListener"/>
+    <listener class="dyamark.jetbrains.DyamarkProviderSwitchListener"
+              topic="org.intellij.plugins.markdown.settings.MarkdownSettings$ChangeListener"/>
   </projectListeners>
 
   <applicationListeners>
