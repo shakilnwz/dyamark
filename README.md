@@ -10,6 +10,9 @@ It's early: see [Status](#status) for what works today and [PLAN.md](PLAN.md) fo
 # Build the stripped binary (build/dyamark)
 ./bin/build
 
+# Build the WebAssembly bundle and JetBrains plugin zip (build/dyamark-jetbrains-<version>.zip)
+./bin/plugin
+
 # gofmt check, go vet, and the tests
 ./bin/test
 
@@ -29,11 +32,32 @@ asks for `vulkan/vulkan.h`.
 
 Pushing a tag like `v0.2.0` runs `.github/workflows/release.yml`: it runs
 the tests and publishes a GitHub release with an Arch `.pkg.tar.zst`, a
-`.deb` and an `.rpm` (made by nfpm from `pkgbuild/nfpm.yaml`), and a
-Windows `.exe`. The Linux packages need glibc 2.39 or newer. On Windows
+`.deb` and an `.rpm` (made by nfpm from `pkgbuild/nfpm.yaml`), a
+Windows `.exe`, and a `dyamark-jetbrains-<version>.zip` plugin for
+PhpStorm and IntelliJ-based IDEs. The Linux packages need glibc 2.39 or newer. On Windows
 there's no file dialog yet (it uses xdg-desktop-portal), so files are
 opened from the command line or "Open with", and an untitled draft can't
 be saved.
+
+## JetBrains Plugin (PhpStorm, IntelliJ IDEA)
+
+dyamark is also available as a Markdown preview provider plugin for JetBrains IDEs (PhpStorm 2026.2+ and IntelliJ Platform):
+
+- **Faithful Mermaid Sequence Diagrams**: renders sequence diagrams natively using dyamark compiled to WebAssembly.
+- **Interactive Diagram Viewer**: click any diagram or press `Tab` / `Enter` to open the fullscreen diagram viewer with pan, zoom, fit, and participant isolation. Press `E` in the viewer to jump the IDE editor caret directly to the diagram's source fence line.
+- **Live Theme Derivation**: automatically derives its palette from the active editor color scheme, updating live on light/dark scheme switches.
+- **Bidirectional Scroll Sync**: scrolling either the Markdown editor or the preview keeps both synchronized.
+- **Link Navigation**: opens web URLs in your browser and relative file links in the IDE.
+
+### Installation
+
+1. Download `dyamark-jetbrains-<version>.zip` from GitHub Releases (or build locally with `./bin/plugin`).
+2. In PhpStorm / IntelliJ IDEA, open **Settings › Plugins › ⚙ › Install Plugin from Disk...** and choose the zip.
+3. Open any Markdown file and click **Use Dyamark** on the one-time notification, or pick **dyamark** under **Settings › Languages & Frameworks › Markdown › Preview**.
+
+| Light Scheme | Dark Scheme |
+|---|---|
+| ![dyamark preview light](docs/screenshots/preview-light.png) | ![dyamark preview dark](docs/screenshots/preview-dark.png) |
 
 ## Status
 

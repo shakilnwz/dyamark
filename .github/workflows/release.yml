@@ -52,6 +52,18 @@ jobs:
             -ldflags "-s -w -H windowsgui -X gioui.org/app.ID=dyamark" \
             -o "dist/dyamark-${GITHUB_REF_NAME#v}-windows-amd64.exe" .
 
+      - name: Setup Java for JetBrains plugin
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Build JetBrains plugin
+        run: |
+          export VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          ./bin/plugin
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

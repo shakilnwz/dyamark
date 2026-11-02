@@ -246,6 +246,7 @@ try {
     ok(shot.dark > 2000, "there is text, dark on the light page");
     ok(shot.blue > 1000, "the diagram's lines and the link are in its accent");
     console.log(`     ${await page.screenshot("1-document.png")}`);
+    await page.screenshot("preview-light.png");
 
     // 2. Keys before any click: Gio's text field has no focus yet.
     mark = page.messages.length;
@@ -304,6 +305,7 @@ try {
     await page.settle();
     const darkShot = await page.eval(countColors([darkTheme.background]));
     ok(darkShot.near[0] > (darkShot.width * darkShot.height) / 2, "live theme switch updates background color");
+    console.log(`     ${await page.screenshot("preview-dark.png")}`);
 
     const errors = page.messages.filter((m) => m.text.startsWith("error"));
     ok(errors.length === 0, `no errors${errors.length ? ": " + errors.map((m) => m.text).join("; ") : ""}`);

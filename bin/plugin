@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Builds dyamark's WebAssembly bundle and packages the JetBrains plugin into
+# build/dyamark-jetbrains-<version>.zip.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# JDK 25: use existing JAVA_HOME, or PhpStorm's bundled JBR which has javac
+if [ -z "${JAVA_HOME:-}" ] || ! "${JAVA_HOME}/bin/javac" -version >/dev/null 2>&1; then
+    if [ -x "/opt/phpstorm/jbr/bin/javac" ]; then
+        export JAVA_HOME="/opt/phpstorm/jbr"
+    fi
+fi
+
+# Derive version from git describe (e.g. 1.2.0 or 1.2.0-8-g7f1ce4c)
+VERSION="${VERSION:-$(git -C "$ROOT_DIR" describe --tags --always 2>/dev/null | sed 's/^v//')}"
+VERSION="${VERSION:-0.1.0-dev}"
+
+echo "==> Building WebAssembly bundle (bin/wasm)..."
+"$ROOT_DIR/bin/wasm"
+
+echo "==> Packaging JetBrains plugin version ${VERSION}..."
+cd "$ROOT_DIR/jetbrains"
+
+./gradlew buildPlugin -PpluginVersion="$VERSION"
+
+DIST_DIR="$ROOT_DIR/build"
+mkdir -p "$DIST_DIR"
+
+ZIP_FILE="$(ls -t "$ROOT_DIR/jetbrains/build/distributions"/dyamark-jetbrains-*.zip 2>/dev/null | head -n1)"
+if [ -z "$ZIP_FILE" ] || [ ! -f "$ZIP_FILE" ]; then
+    echo "Error: plugin zip not found in jetbrains/build/distributions" >&2
+    exit 1
+fi
+
+TARGET_ZIP="$DIST_DIR/dyamark-jetbrains-${VERSION}.zip"
+cp "$ZIP_FILE" "$TARGET_ZIP"
+
+if [ -d "$ROOT_DIR/dist" ]; then
+    cp "$TARGET_ZIP" "$ROOT_DIR/dist/"
+fi
+
+ZIP_SIZE="$(du -h "$TARGET_ZIP" | cut -f1)"
+echo "==> Plugin package ready: ${TARGET_ZIP} (${ZIP_SIZE})"

@@ -4,7 +4,9 @@ plugins {
 }
 
 group = "io.github.shakilnwz.dyamark"
-version = "0.1.0-spike"
+version = providers.gradleProperty("pluginVersion").orNull
+    ?: providers.environmentVariable("VERSION").orNull
+    ?: "0.1.0-dev"
 
 repositories {
     mavenCentral()
@@ -15,7 +17,12 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        local(providers.gradleProperty("dyamark.ide"))
+        val localIde = providers.gradleProperty("dyamark.ide").orNull?.let { file(it) }
+        if (localIde != null && localIde.isDirectory) {
+            local(localIde)
+        } else {
+            phpstorm("2026.2.4")
+        }
         bundledPlugin("org.intellij.plugins.markdown")
         bundledPlugin("com.intellij.modules.jcef")
     }

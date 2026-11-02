@@ -299,7 +299,11 @@ dyamark/
 7. **Packaging.** PKGBUILD, `.desktop`, icon, `?` overlay, and a README with
    a screenshot made from sample content. The `?` overlay is done, with the
    fixes from the UI review (`docs/reports/2026-10-28-ui-review.md`).
-8. **Later.** `mmdc` rendering for other types, the v11 participant shapes,
+8. **PhpStorm / JetBrains Plugin.** Pluggable Markdown preview provider
+   rendering Markdown and native Mermaid sequence diagrams via WebAssembly
+   in JCEF, following IDE editor colors live, with bidirectional scroll sync
+   and interactive diagram viewer. See `docs/plans/2026-11-01-phpstorm-plugin.md`.
+9. **Later.** `mmdc` rendering for other types, the v11 participant shapes,
    editor syntax colouring, and a headless `check` / `export` CLI (cheap,
    since `seq/svg` already exists).
 
