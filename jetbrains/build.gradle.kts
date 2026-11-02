@@ -19,6 +19,7 @@ dependencies {
         bundledPlugin("org.intellij.plugins.markdown")
         bundledPlugin("com.intellij.modules.jcef")
     }
+    testImplementation(kotlin("test"))
 }
 
 kotlin {
