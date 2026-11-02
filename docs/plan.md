@@ -4,6 +4,10 @@ A small, fast Markdown viewer and editor for Omarchy, in the spirit of
 omawrite, built around one thing omawrite doesn't do: **drawing Mermaid
 sequence diagrams, natively and faithfully.**
 
+This is the design plan the project was built from. Progress against it
+is tracked in [status.md](status.md); later, narrower plans are in
+[plans/](plans/).
+
 ## Goals
 
 1. Open a `.md` file and see it rendered, sequence diagrams included,
@@ -45,7 +49,7 @@ one.
 | Language | Go (1.27, set up through mise) | One binary, simple concurrency, easy tests |
 | UI | [Gio](https://gioui.org), built with `novulkan,nox11` | Pure-Go, GPU-drawn, Wayland-native, immediate mode, no browser engine. OpenGL ES through EGL only: no Vulkan headers to build, no X11 libraries to link |
 | Markdown | [`yuin/goldmark`](https://github.com/yuin/goldmark) + GFM | Fast and CommonMark-correct. Start from `gioui.org/x/markdown` + `x/richtext` and extend them for tables and code blocks |
-| Sequence parser | [`julianshen/mmgo`](https://github.com/julianshen/mmgo)'s `pkg/parser/sequence`, **copied into `seq/parse`** and extended | MIT, keeps colours, `rect`, create/destroy and the block tree. See `docs/reports/2026-10-26-go-mermaid-libraries.md` |
+| Sequence parser | [`julianshen/mmgo`](https://github.com/julianshen/mmgo)'s `pkg/parser/sequence`, **copied into `seq/parse`** and extended | MIT, keeps colours, `rect`, create/destroy and the block tree. See [the Go Mermaid libraries report](reports/2026-10-26-go-mermaid-libraries.md) |
 | YAML | [`go.yaml.in/yaml/v3`](https://github.com/yaml/go-yaml) | Frontmatter `config:` and participant `@{…}` metadata, which Mermaid reads as YAML |
 | Sequence layout + drawing | Our own `seq/layout`, `seq/draw`, `seq/svg` | No Go module matches Mermaid's layout or draws to Gio. A port of Mermaid's `sequenceRenderer.ts` (MIT) |
 | Other Mermaid types | `mmdc` on request, shown as a PNG | Starts Chromium only when asked, only for that diagram |
@@ -272,6 +276,7 @@ dyamark/
   bin/webcheck               bin/wasm, then check it in headless Chromium
   bin/install                makepkg -fsi in pkgbuild/
   pkgbuild/PKGBUILD  pkgbuild/dyamark.desktop  pkgbuild/dyamark.svg
+  docs/                      this plan, status, later plans, reports, screenshots
   README.md  LICENSE  .gitignore
 ```
 
@@ -296,13 +301,15 @@ dyamark/
    auto-save, external-change prompts, portal open/save.
 6. **Sequence extras.** *Done.* Pinned participant row, focus-a-participant, and
    the sequence-numbers toggle.
-7. **Packaging.** PKGBUILD, `.desktop`, icon, `?` overlay, and a README with
+7. **Packaging.** *Mostly done.* PKGBUILD, `.desktop`, icon, `?` overlay, and a README with
    a screenshot made from sample content. The `?` overlay is done, with the
-   fixes from the UI review (`docs/reports/2026-10-28-ui-review.md`).
+   fixes from the UI review ([reports/2026-10-28-ui-review.md](reports/2026-10-28-ui-review.md)).
+   Still to do: a screenshot of the app itself in the README.
 8. **PhpStorm / JetBrains Plugin.** Pluggable Markdown preview provider
    rendering Markdown and native Mermaid sequence diagrams via WebAssembly
    in JCEF, following IDE editor colors live, with bidirectional scroll sync
-   and interactive diagram viewer. See `docs/plans/2026-11-01-phpstorm-plugin.md`.
+   and interactive diagram viewer. *Shipped in v1.3.0.* See
+   [plans/2026-11-01-phpstorm-plugin.md](plans/2026-11-01-phpstorm-plugin.md).
 9. **Later.** `mmdc` rendering for other types, the v11 participant shapes,
    editor syntax colouring, and a headless `check` / `export` CLI (cheap,
    since `seq/svg` already exists).
