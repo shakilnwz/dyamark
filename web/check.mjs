@@ -267,6 +267,19 @@ try {
     const scrolled = await page.next("scroll", mark, 3000);
     ok(scrolled && Number(scrolled.text.split(" ")[1]) > 40, `Page Down after a click scrolls: ${scrolled?.text}`);
 
+    // 3b. The wheel is eased: the view gets there over several frames,
+    // telling each new top line on the way, where a jump tells one.
+    await page.eval("dyamark.scrollToLine(1)");
+    await page.settle();
+    mark = page.messages.length;
+    await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 400, y: 300, deltaX: 0, deltaY: 600 });
+    await page.next("scroll", mark, 3000);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const wheeled = page.messages.slice(mark).filter((m) => m.text.startsWith("scroll"));
+    const spread = wheeled.length ? Math.round(wheeled.at(-1).at - wheeled[0].at) : 0;
+    const lines = wheeled.map((m) => m.text.split(" ")[1]).join(", ");
+    ok(wheeled.length >= 2 && spread >= 30, `a 600 px wheel is eased: ${wheeled.length} top lines over ${spread} ms (${lines})`);
+
     // 4. Tab and Enter open the diagram in the viewer; E asks to edit its
     // source; Esc goes back.
     await page.eval("dyamark.scrollToLine(1)");

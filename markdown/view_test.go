@@ -3,6 +3,7 @@ package markdown
 import (
 	"fmt"
 	"image"
+	"math"
 	"strings"
 	"testing"
 
@@ -360,5 +361,181 @@ func TestScrollbar(t *testing.T) {
 	frame()
 	if v.List.Position.First < 50 {
 		t.Errorf("click on the track: first block %d", v.List.Position.First)
+	}
+}
+
+// Ctrl+wheel zooms the text, and doesn't scroll, in the middle of a
+// document as at its ends.
+func TestCtrlWheelZoomsText(t *testing.T) {
+	var src strings.Builder
+	for i := range 60 {
+		fmt.Fprintf(&src, "Paragraph %d.\n\n", i)
+	}
+	v := NewView(Parse([]byte(src.String()), nil))
+	r, frame := viewFrames(t, v)
+	frame()
+	v.List.Position = layout.Position{First: 20}
+	frame()
+	before := v.List.Position
+	ctrlWheel := func(dy float32) {
+		r.Queue(pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: f32.Pt(500, 400), Scroll: f32.Pt(0, dy), Modifiers: key.ModCtrl})
+		frame()
+	}
+	ctrlWheel(-120)
+	if got := v.TextScale; math.Abs(float64(got)-1.1) > 1e-4 {
+		t.Errorf("a Ctrl+wheel notch up zoomed the text to %v, want one step, 1.1", got)
+	}
+	if got := v.List.Position; got.First != before.First || got.Offset != before.Offset {
+		t.Errorf("Ctrl+wheel scrolled from %+v to %+v", before, got)
+	}
+	// A touchpad's small steps add up to a step.
+	for range 3 {
+		ctrlWheel(-10)
+	}
+	if got := v.TextScale; math.Abs(float64(got)-1.1) > 1e-4 {
+		t.Errorf("30 dp of Ctrl+touchpad zoomed the text to %v, before a step's worth", got)
+	}
+	ctrlWheel(-10)
+	if got := v.TextScale; math.Abs(float64(got)-1.2) > 1e-4 {
+		t.Errorf("40 dp of Ctrl+touchpad zoomed the text to %v, want 1.2", got)
+	}
+}
+
+// smoothView returns a view of 60 short paragraphs, all as tall, with
+// SmoothScroll on, laid out once; a router feeding it; a function that
+// lays out a frame; and one that returns how far it's scrolled, in px.
+func smoothView(t *testing.T) (*View, *input.Router, func(), func() int) {
+	t.Helper()
+	var src strings.Builder
+	for i := range 60 {
+		fmt.Fprintf(&src, "Paragraph %d.\n\n", i)
+	}
+	v := NewView(Parse([]byte(src.String()), nil))
+	v.SmoothScroll = true
+	r, frame := viewFrames(t, v)
+	frame()
+	scrolled := func() int {
+		p := v.List.Position
+		return p.First*(v.heights[p.First]+v.List.Gap) + p.Offset
+	}
+	return v, r, frame, scrolled
+}
+
+// settle lays out frames until the eased scrolling is done, and returns
+// how many it took.
+func settle(t *testing.T, v *View, frame func()) int {
+	t.Helper()
+	for n := 1; n <= 100; n++ {
+		frame()
+		if v.scrollLeft == 0 {
+			return n
+		}
+	}
+	t.Fatalf("the eased scrolling didn't end: %v px left", v.scrollLeft)
+	return 0
+}
+
+func wheel(r *input.Router, dy float32) {
+	r.Queue(pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: f32.Pt(500, 400), Scroll: f32.Pt(0, dy)})
+}
+
+// With SmoothScroll, a wheel's notch is eased over a few frames and ends
+// where it would have jumped to.
+func TestSmoothWheelScroll(t *testing.T) {
+	v, r, frame, scrolled := smoothView(t)
+	wheel(r, 100)
+	frame()
+	if got := scrolled(); got <= 0 || got >= 100 {
+		t.Errorf("first frame of a 100 px notch scrolled %d px, want some of it", got)
+	}
+	if n := settle(t, v, frame); n < 3 {
+		t.Errorf("a 100 px notch was done in %d frames", n)
+	}
+	if got := scrolled(); got != 100 {
+		t.Errorf("a 100 px notch scrolled %d px", got)
+	}
+
+	// A second notch while the first is under way adds to it.
+	wheel(r, 100)
+	frame()
+	wheel(r, 100)
+	settle(t, v, frame)
+	if got := scrolled(); got != 300 {
+		t.Errorf("three 100 px notches scrolled %d px, want 300", got)
+	}
+}
+
+// A touchpad's small steps move the view at once, even with SmoothScroll.
+func TestTouchpadScrollsAtOnce(t *testing.T) {
+	_, r, frame, scrolled := smoothView(t)
+	for i := 1; i <= 4; i++ {
+		wheel(r, 6)
+		frame()
+		if got := scrolled(); got != 6*i {
+			t.Fatalf("after %d steps of 6 px the view is %d px down", i, got)
+		}
+	}
+}
+
+// Turning the wheel back drops the rest of the way, and a jump stops the
+// eased scrolling.
+func TestSmoothScrollStops(t *testing.T) {
+	v, r, frame, scrolled := smoothView(t)
+	wheel(r, 400)
+	frame()
+	frame()
+	at := scrolled()
+	wheel(r, -100)
+	settle(t, v, frame)
+	if got, want := scrolled(), at-100; got < want-1 || got > want+1 {
+		t.Errorf("turned back 100 px at %d px, ended at %d px, want %d", at, got, want)
+	}
+
+	wheel(r, 400)
+	frame()
+	v.List.Position = layout.Position{First: 2}
+	frame()
+	if v.scrollLeft != 0 || v.List.Position.First != 2 || v.List.Position.Offset != 0 {
+		t.Errorf("after a jump to block 2: %+v, %v px left", v.List.Position, v.scrollLeft)
+	}
+
+	// At the top, the rest of the way up goes nowhere.
+	v.List.Position = layout.Position{}
+	frame()
+	wheel(r, -400)
+	frame()
+	if v.scrollLeft != 0 {
+		t.Errorf("scrolling up at the top left %v px to go", v.scrollLeft)
+	}
+}
+
+// With SmoothScroll, the reading keys are eased too, and Home and End
+// still jump.
+func TestSmoothKeys(t *testing.T) {
+	v, r, frame, scrolled := smoothView(t)
+	r.Queue(key.Event{Name: key.NamePageDown, State: key.Press})
+	frame()
+	if got := scrolled(); got <= 0 || got >= 800-scrollLine {
+		t.Errorf("first frame of Page Down scrolled %d px", got)
+	}
+	settle(t, v, frame)
+	if got, want := scrolled(), 800-scrollLine; got != want {
+		t.Errorf("Page Down scrolled %d px, want %d", got, want)
+	}
+	r.Queue(key.Event{Name: key.NameHome, State: key.Press})
+	frame()
+	if got := scrolled(); got != 0 || v.scrollLeft != 0 {
+		t.Errorf("Home: %d px down, %v px left", got, v.scrollLeft)
+	}
+}
+
+// Without SmoothScroll the wheel moves the view at once, as it did.
+func TestWheelScrollsAtOnce(t *testing.T) {
+	v, r, frame, scrolled := smoothView(t)
+	v.SmoothScroll = false
+	wheel(r, 100)
+	frame()
+	if got := scrolled(); got != 100 {
+		t.Errorf("a 100 px notch scrolled %d px", got)
 	}
 }

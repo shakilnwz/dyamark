@@ -27,6 +27,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 )
@@ -69,6 +70,10 @@ type Viewer struct {
 	// again at the next frame.
 	infoSince time.Time
 	wakeInfo  bool
+
+	// drawing keeps the diagram's drawing between frames, so panning
+	// doesn't draw it again.
+	drawing draw.Cache
 
 	// Callbacks
 	OnClose func()
@@ -403,11 +408,8 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 				v.pointerPos = e.Position
 			case pointer.Scroll:
 				v.wakeInfo = true
-				if e.Scroll.Y < 0 {
-					v.ZoomBy(1.15, e.Position)
-					gtx.Execute(op.InvalidateCmd{})
-				} else if e.Scroll.Y > 0 {
-					v.ZoomBy(1.0/1.15, e.Position)
+				if e.Scroll.Y != 0 {
+					v.ZoomBy(wheelZoom(e.Scroll.Y/gtx.Metric.PxPerDp), e.Position)
 					gtx.Execute(op.InvalidateCmd{})
 				}
 			}
@@ -470,14 +472,45 @@ func (v *Viewer) drawDiagram(gtx layout.Context, th *material.Theme, seqTh seq.T
 	diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
 	diagGtx.Constraints = layout.Exact(image.Pt(int(v.Diagram.ViewBox.W), int(v.Diagram.ViewBox.H)))
 
-	draw.Draw(diagGtx, th, seqTh, v.Diagram)
-	if v.Focus != "" {
-		v.dimExcept(diagGtx, th, seqTh, v.Diagram, bg)
-	}
+	key := drawingKey{v.Diagram, th, th.Shaper, seqTh, bg, v.Focus}
+	v.drawing.Layout(diagGtx, key, func(gtx layout.Context) layout.Dimensions {
+		dims := draw.Draw(gtx, th, seqTh, v.Diagram)
+		if v.Focus != "" {
+			v.dimExcept(gtx, th, seqTh, v.Diagram, bg)
+		}
+		return dims
+	})
+}
+
+// drawingKey is what the viewer's drawing of a diagram depends on.
+type drawingKey struct {
+	diag   *layoutPkg.Diagram
+	th     *material.Theme
+	shaper *text.Shaper
+	seq    seq.Theme
+	bg     color.NRGBA
+	focus  string
 }
 
 // clickSlop is how far, in px, a press may move and still be a click.
 const clickSlop = 4
+
+const (
+	// wheelStep is the zoom for a wheel's notch.
+	wheelStep = 1.15
+	// wheelNotch is the scrolling, in dp, that zooms by wheelStep. A
+	// notch scrolls at least as far, 50 dp or more in the app and 120 px
+	// in the IDE's browser, so each still zooms by wheelStep.
+	wheelNotch = 40
+)
+
+// wheelZoom returns the zoom for d dp of wheel scrolling: in proportion
+// to it, so that a touchpad's many small steps zoom a little each, and
+// at most wheelStep, a notch's, either way.
+func wheelZoom(d float32) float32 {
+	f := math.Pow(wheelStep, -float64(d)/wheelNotch)
+	return float32(min(max(f, 1/wheelStep), wheelStep))
+}
 
 // dimExcept washes diag over with bg and draws the parts involving the
 // focused participant again on top, at full strength.

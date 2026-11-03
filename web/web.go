@@ -118,6 +118,8 @@ func New(host Host, shaper *text.Shaper, invalidate func()) *Preview {
 	p.view.OnOpenViewer = p.openViewer
 	// No mmdc in a browser: other Mermaid diagrams show their source.
 	p.view.OnRenderMermaid = nil
+	// In the IDE the wheel comes in notches of 120 px; ease them.
+	p.view.SmoothScroll = true
 	p.viewer.OnClose = func() { p.viewing = false }
 	p.viewer.OnEdit = func(int) {
 		if pos := p.shownPos(); pos >= 0 {

@@ -2,6 +2,8 @@ package markdown
 
 import (
 	"image"
+	"math"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/gesture"
@@ -26,6 +28,10 @@ type View struct {
 	// and R) while another widget, the editor, takes the typing: a typed
 	// letter arrives as both text and a key press.
 	NoPlainKeys bool
+	// SmoothScroll eases the wheel's notches and the reading keys over a
+	// few frames instead of jumping; a touchpad's small steps still move
+	// the view at once.
+	SmoothScroll bool
 
 	OnOpenViewer    func(block *SequenceBlock)
 	OnRenderMermaid func(block *MermaidOtherBlock)
@@ -43,7 +49,37 @@ type View struct {
 	// heights holds the height of each block laid out last, for laidDoc.
 	heights map[int]int
 	laidDoc *ParsedDocument
+
+	// scrollLeft is how far, in px, the eased scrolling has still to go,
+	// and scrollAt the frame it last moved. scrollFrac is the part of a
+	// px scrolled but not shown yet.
+	scrollLeft float32
+	scrollAt   time.Time
+	scrollFrac float32
+	// laidPos is where the list was after the last layout. When it has
+	// moved since, by a jump, the eased scrolling stops.
+	laidPos layout.Position
+	// zoomWheel adds up a Ctrl+wheel's scrolling, in dp, towards a text
+	// zoom step.
+	zoomWheel float32
 }
+
+const (
+	// easeNotch is the least wheel scrolling, in dp, that's eased: half
+	// a notch in the IDE's browser, which gets 120 px for one. A
+	// touchpad's smaller steps move the view at once.
+	easeNotch = 60
+	// zoomNotch is the Ctrl+wheel scrolling, in dp, that zooms the text a
+	// step: a notch is 120 px in the IDE's browser, and 50 dp or more in
+	// the app. A touchpad's smaller steps add up to one.
+	zoomNotch = 40
+	// easeTime is the eased scrolling's time constant: it covers 90% of
+	// the way in about 2.3 of them.
+	easeTime = 40 * time.Millisecond
+	// frameTime is the time an eased frame is taken to be when there's
+	// no clock: its first frame, and in tests.
+	frameTime = 16 * time.Millisecond
+)
 
 // blockSpan returns where block i's top is in the view and its height, as
 // last laid out; ok is false if it wasn't.
@@ -216,31 +252,108 @@ const scrollLine = 48
 // the arrows by a line, Page Up/Down and Space by a screen less a line,
 // Home and End to either end.
 func (v *View) scrollKey(e key.Event, height int) bool {
-	page := max(height-scrollLine, scrollLine)
+	page := float32(max(height-scrollLine, scrollLine))
 	switch e.Name {
 	case key.NameUpArrow:
-		v.List.Position.Offset -= scrollLine
+		v.scroll(-scrollLine, 0)
 	case key.NameDownArrow:
-		v.List.Position.Offset += scrollLine
+		v.scroll(scrollLine, 0)
 	case key.NamePageUp:
-		v.List.Position.Offset -= page
+		v.scroll(-page, 0)
 	case key.NamePageDown:
-		v.List.Position.Offset += page
+		v.scroll(page, 0)
 	case key.NameSpace:
 		if e.Modifiers.Contain(key.ModShift) {
-			v.List.Position.Offset -= page
+			v.scroll(-page, 0)
 		} else {
-			v.List.Position.Offset += page
+			v.scroll(page, 0)
 		}
 	case key.NameHome:
+		v.stopScroll()
 		v.List.Position = layout.Position{}
 	case key.NameEnd:
+		v.stopScroll()
 		// Past the end; the list stops at the last block's bottom.
 		v.List.Position = layout.Position{First: len(v.Doc.Blocks), BeforeEnd: true}
 	default:
 		return false
 	}
 	return true
+}
+
+// scroll scrolls the view by d px: eased when SmoothScroll is on and d
+// is notch px or more, a wheel's notch or a key's line rather than a
+// touchpad's small step; otherwise at once.
+func (v *View) scroll(d, notch float32) {
+	if !v.SmoothScroll || abs(d) < notch {
+		v.moveBy(d)
+		return
+	}
+	if d*v.scrollLeft < 0 {
+		// Turned back: the rest of the way the other way is dropped.
+		v.scrollLeft = 0
+	}
+	if v.scrollLeft == 0 {
+		v.scrollAt = time.Time{}
+	}
+	v.scrollLeft += d
+}
+
+// moveBy moves the list by d px, keeping the part of a px it can't.
+func (v *View) moveBy(d float32) {
+	d += v.scrollFrac
+	n := int(d)
+	v.scrollFrac = d - float32(n)
+	v.List.Position.Offset += n
+}
+
+// stopScroll drops what's left of the eased scrolling.
+func (v *View) stopScroll() {
+	v.scrollLeft, v.scrollFrac = 0, 0
+}
+
+// ease moves the eased scrolling on by the time since its last frame,
+// and asks for another frame while there's more of it.
+func (v *View) ease(gtx layout.Context) {
+	if v.scrollLeft == 0 {
+		return
+	}
+	dt := frameTime
+	if !v.scrollAt.IsZero() && !gtx.Now.IsZero() {
+		dt = min(max(gtx.Now.Sub(v.scrollAt), 0), 3*frameTime)
+	}
+	v.scrollAt = gtx.Now
+	step := v.scrollLeft * float32(1-math.Exp(-dt.Seconds()/easeTime.Seconds()))
+	if abs(v.scrollLeft-step) < 1 {
+		// The last of it, to the whole px.
+		v.List.Position.Offset += int(math.Round(float64(v.scrollLeft + v.scrollFrac)))
+		v.stopScroll()
+		return
+	}
+	v.scrollLeft -= step
+	v.moveBy(step)
+	gtx.Execute(op.InvalidateCmd{})
+}
+
+// wheelZoom zooms the text a step for a Ctrl+wheel's notch, d dp of
+// scrolling; a touchpad's smaller steps add up to one.
+func (v *View) wheelZoom(d float32) {
+	if d*v.zoomWheel < 0 {
+		v.zoomWheel = 0
+	}
+	v.zoomWheel += d
+	switch {
+	case v.zoomWheel <= -zoomNotch:
+		v.ZoomTextIn()
+		v.zoomWheel = 0
+	case v.zoomWheel >= zoomNotch:
+		v.ZoomTextOut()
+		v.zoomWheel = 0
+	}
+}
+
+func abs(f float32) float32 {
+	return float32(math.Abs(float64(f)))
 }
 
 // visibleBlocks returns the blocks on screen in the last frame.
@@ -258,6 +371,11 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	size := gtx.Constraints.Max
 	if size.X <= 0 || size.Y <= 0 || v.Doc == nil {
 		return layout.Dimensions{}
+	}
+	// A jump since the last layout, the caller's or the scrollbar's,
+	// stops the eased scrolling.
+	if p := v.List.Position; p.First != v.laidPos.First || p.Offset != v.laidPos.Offset {
+		v.stopScroll()
 	}
 
 	filters := []event.Filter{
@@ -297,12 +415,13 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 		}
 		switch e := ev.(type) {
 		case pointer.Event:
-			if e.Kind == pointer.Scroll && e.Modifiers.Contain(key.ModCtrl) {
-				if e.Scroll.Y < 0 {
-					v.ZoomTextIn()
-				} else if e.Scroll.Y > 0 {
-					v.ZoomTextOut()
-				}
+			if e.Kind != pointer.Scroll {
+				break
+			}
+			if e.Modifiers.Contain(key.ModCtrl) {
+				v.wheelZoom(e.Scroll.Y / gtx.Metric.PxPerDp)
+			} else {
+				v.scroll(e.Scroll.Y, easeNotch*gtx.Metric.PxPerDp)
 			}
 		case key.Event:
 			if e.State != key.Press {
@@ -334,10 +453,6 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 			}
 		}
 	}
-
-	area := clip.Rect(image.Rectangle{Max: size}).Push(gtx.Ops)
-	event.Op(gtx.Ops, v)
-	area.Pop()
 
 	// Compute readable column width (capped at 860px)
 	const maxColWidth = 860
@@ -377,6 +492,7 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	if v.show > 0 {
 		if v.reveal(v.show-1, size.Y) {
 			v.show = 0
+			v.stopScroll()
 		} else {
 			// Lay out the new document first.
 			gtx.Execute(op.InvalidateCmd{})
@@ -407,12 +523,18 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	}
 	clear(v.heights)
 	v.laidDoc = v.Doc
+	v.ease(gtx)
 	n := len(v.Doc.Blocks)
 	dims := v.List.Layout(colGtx, n, func(gtx layout.Context, i int) layout.Dimensions {
 		dims := v.Doc.Blocks[i].Layout(gtx, th, oTheme)
 		v.heights[i] = dims.Size.Y
 		return dims
 	})
+	v.laidPos = v.List.Position
+	// At either end, the rest of the way goes nowhere.
+	if p := v.List.Position; v.scrollLeft < 0 && p.First == 0 && p.Offset == 0 || v.scrollLeft > 0 && !p.BeforeEnd {
+		v.stopScroll()
+	}
 	// The list clips its blocks to the column, so the mark beside one is
 	// drawn after it.
 	if top, h, ok := v.blockSpan(v.Mark); ok {
@@ -422,6 +544,15 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 	}
 	trans.Pop()
 	v.layoutScrollbar(gtx, th, oTheme, size)
+
+	// The wheel is taken here, over the list, rather than by the list:
+	// so that Ctrl+wheel zooms instead of scrolling, and the scrolling can
+	// be eased. Everything else passes through to the blocks.
+	pass := pointer.PassOp{}.Push(gtx.Ops)
+	area := clip.Rect(image.Rectangle{Max: size}).Push(gtx.Ops)
+	event.Op(gtx.Ops, v)
+	area.Pop()
+	pass.Pop()
 	return dims
 }
 

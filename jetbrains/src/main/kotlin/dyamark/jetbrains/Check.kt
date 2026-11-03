@@ -190,12 +190,33 @@ object Check {
         val toldBack = since(m).filter { it.panel === panel && it.text.startsWith("in scroll ") }
         result(toldBack.isEmpty(), 6, "and the preview doesn't tell it back", toldBack.joinToString { it.text })
 
+        // The frame rate the page gets, and what a wheel notch comes to in
+        // it: the eased scrolling and the zooms are tuned for 120 px.
+        m = mark()
+        panel.cefBrowser.executeJavaScript(
+            "{ let n = 0; const end = performance.now() + 1000;" +
+                " const tick = (t) => { if (t < end) { n++; requestAnimationFrame(tick); } else dyamarkSend('log fps ' + n); };" +
+                " requestAnimationFrame(tick); }",
+            WebResources.INDEX, 0,
+        )
+        val fps = waitFor(m, 5000) { it.panel === panel && it.text.startsWith("in log fps ") }?.text?.substringAfterLast(' ')?.toIntOrNull()
+        result(fps != null && fps >= 50, 6, "the preview draws at 60 fps, not Chromium's off-screen 30", "$fps frames in a second")
+        panel.cefBrowser.executeJavaScript(
+            "addEventListener('wheel', (e) => dyamarkSend('log wheel ' + e.deltaY + ' mode ' + e.deltaMode + ' dpr ' + devicePixelRatio)," +
+                " { capture: true, passive: true });",
+            WebResources.INDEX, 0,
+        )
+        pause(300)
+
         // Preview to editor.
         edt { ed.scrollingModel.scrollVertically(0) }
         pause(1200)
         m = mark()
         wheel(panel, notches = 6)
+        waitFor(m, 2000) { it.panel === panel && it.text.startsWith("in log wheel ") }?.let { note("a wheel notch in the page: ${it.text.removePrefix("in log ")}") }
         pause(1500)
+        val eased = since(m).filter { it.panel === panel && it.text.startsWith("in scroll ") }
+        note("6 notches told ${eased.size} top lines: ${eased.joinToString(" ") { it.text.substringAfterLast(' ') }}")
         val scrolled = since(m).lastOrNull { it.panel === panel && it.text.startsWith("in scroll ") }?.text?.substringAfterLast(' ')?.toIntOrNull()
         val top = edt { topLine(ed) }
         result(scrolled != null, 6, "the mouse wheel on the preview scrolls it, and it tells the IDE", "scroll $scrolled")

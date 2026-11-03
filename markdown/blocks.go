@@ -21,6 +21,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -178,6 +179,17 @@ type SequenceBlock struct {
 	// diagram that doesn't parse goes wrong.
 	OnEditLine func(line int)
 	editClick  widget.Clickable
+	// drawing keeps the diagram's drawing between frames, so scrolling
+	// doesn't draw it again.
+	drawing draw.Cache
+}
+
+// drawingKey is what a diagram's drawing depends on.
+type drawingKey struct {
+	diag   *layoutPkg.Diagram
+	th     *material.Theme
+	shaper *text.Shaper
+	seq    seq.Theme
 }
 
 // ErrorLine returns the line of the file where the diagram's error is, or
@@ -278,7 +290,10 @@ func (s *SequenceBlock) Layout(gtx layout.Context, th *material.Theme, oTheme *T
 		diagGtx := gtx
 		diagGtx.Metric = unit.Metric{PxPerDp: 1.0, PxPerSp: 1.0}
 		diagGtx.Constraints = layout.Exact(image.Pt(int(diagW), int(diagH)))
-		draw.Draw(diagGtx, th, diagTheme, s.Diagram)
+		key := drawingKey{s.Diagram, th, th.Shaper, diagTheme}
+		s.drawing.Layout(diagGtx, key, func(gtx layout.Context) layout.Dimensions {
+			return draw.Draw(gtx, th, diagTheme, s.Diagram)
+		})
 
 		trans.Pop()
 

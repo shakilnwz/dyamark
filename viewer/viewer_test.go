@@ -2,6 +2,7 @@ package viewer
 
 import (
 	"image"
+	"math"
 	"testing"
 
 	"dyamark/fonts"
@@ -286,5 +287,32 @@ func TestViewerShiftedZoomKeys(t *testing.T) {
 	frame()
 	if v.Zoom >= zoom {
 		t.Errorf("Shift+_ didn't zoom out: %f >= %f", v.Zoom, zoom)
+	}
+}
+
+// The wheel zooms in proportion to how far it scrolls, up to a notch's
+// step: ten small touchpad steps zoom as far as one notch, and a big
+// notch no further than before.
+func TestWheelZoomFollowsTheScroll(t *testing.T) {
+	step := wheelZoom(-wheelNotch / 10)
+	if step <= 1 || step > 1.02 {
+		t.Errorf("a tenth of a notch up zooms by %v", step)
+	}
+	total := float32(1)
+	for range 10 {
+		total *= step
+	}
+	if math.Abs(float64(total-wheelStep)) > 1e-4 {
+		t.Errorf("ten tenths of a notch zoom by %v, want %v", total, wheelStep)
+	}
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
+	if got := wheelZoom(-120); !near(float64(got), wheelStep) {
+		t.Errorf("a 120 dp notch up zooms by %v, want %v", got, wheelStep)
+	}
+	if got := wheelZoom(120); !near(float64(got), 1/wheelStep) {
+		t.Errorf("a 120 dp notch down zooms by %v, want %v", got, 1/wheelStep)
+	}
+	if got := wheelZoom(0); got != 1 {
+		t.Errorf("no scrolling zooms by %v", got)
 	}
 }

@@ -11,6 +11,7 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.wm.IdeFocusManager
@@ -40,6 +41,7 @@ private val LOG = logger<DyamarkPanel>()
 class DyamarkPanel(private val project: Project?, private val file: VirtualFile?) : MarkdownHtmlPanel {
     private val browser = JBCefBrowser.createBuilder()
         .setEnableOpenDevToolsMenuItem(true)
+        .setWindowlessFramerate(frameRate())
         .build()
     private val query = JBCefJSQuery.create(browser as JBCefBrowserBase)
 
@@ -64,6 +66,9 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
     init {
         Disposer.register(this, browser)
         Disposer.register(this, query)
+        // The out-of-process browser the IDE runs ignores the builder's
+        // rate and starts at 30; this one it sends on, once it's made.
+        browser.cefBrowser.setWindowlessFrameRate(frameRate())
 
         browser.component.putClientProperty(PANEL_CLIENT_PROPERTY, this)
         (browser.cefBrowser.uiComponent as? JComponent)?.putClientProperty(PANEL_CLIENT_PROPERTY, this)
@@ -431,6 +436,20 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
         private const val ECHO_NANOS = 500_000_000L
     }
 }
+
+/**
+ * The off-screen browser's frame rate. The IDE's registry leaves
+ * `ide.browser.jcef.osr.framerate` at 0, which is Chromium's default of
+ * 30 fps: too few for smooth scrolling, panning and zooming. A rate set
+ * there is kept.
+ */
+private fun frameRate(): Int =
+    Registry.intValue(FRAME_RATE_KEY, 0).takeIf { it > 0 } ?: FRAME_RATE
+
+private const val FRAME_RATE_KEY = "ide.browser.jcef.osr.framerate"
+
+// The most Chromium draws an off-screen browser at.
+private const val FRAME_RATE = 60
 
 /** Quotes [s] as a JavaScript string literal. */
 internal fun jsString(s: String): String = buildString(s.length + 16) {
