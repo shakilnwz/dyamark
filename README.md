@@ -92,12 +92,39 @@ scheme, and scroll sync.
 2. **Settings › Plugins › ⚙ › Install Plugin from Disk…**, and choose the zip.
 3. Open a Markdown file and click **Use Dyamark**.
 
+### Requirements
+
+- **PhpStorm 2026.2** (build 262). Other IntelliJ-based IDEs on 2026.2
+  should work, but only PhpStorm is tested. The plugin is pinned to 262
+  because the Markdown preview API it uses is experimental, so 2026.3
+  needs a new release.
+- The bundled **Markdown** plugin, enabled.
+- **JCEF**, which the IDE's default runtime (JetBrains Runtime) has.
+- **WebGL**, so leave the IDE's browser GPU on (the default). If
+  `ide.browser.jcef.gpu.disable` is set in the Registry, add
+  `--enable-unsafe-swiftshader` to `ide.browser.jcef.extra.args` for
+  software WebGL. Without WebGL the preview says so instead of drawing.
+- About 40 MB more memory per open preview than the built-in one.
+
+### Using it
+
+- Switch previews under **Settings › Languages & Frameworks › Markdown ›
+  Preview**, or with the one-time **Use Dyamark** notification.
+- The keys are the desktop app's; `?` lists them. **Ctrl+=**, **Ctrl+-**
+  and **Ctrl+0** zoom the focused preview, and **E** in the
+  diagram viewer puts the caret on the diagram's source.
+- The preview draws at 60 fps. Set `ide.browser.jcef.osr.framerate` in
+  the Registry to change it.
+- Only sequence diagrams are drawn; other Mermaid types show as source.
+- Text is drawn with the bundled Liberation fonts, so scripts they don't
+  cover, such as CJK, show as boxes.
+
 ## Development
 
 ```bash
 ./bin/test     # gofmt, go vet and tests
 ./bin/build    # desktop binary
-./bin/plugin   # JetBrains plugin (needs JDK 25)
+./bin/plugin   # JetBrains plugin (needs JDK 25, or PhpStorm's bundled JBR)
 ```
 
 ## Licence

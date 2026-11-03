@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"image"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -26,12 +27,12 @@ const fence = "```"
 // fakeHost records what the preview tells the page, one line each.
 type fakeHost struct{ got []string }
 
-func (h *fakeHost) Ready()              { h.got = append(h.got, "ready") }
-func (h *fakeHost) Drawn()              { h.got = append(h.got, "drawn") }
-func (h *fakeHost) OpenLink(url string) { h.got = append(h.got, "link "+url) }
-func (h *fakeHost) EditLine(line int)   { h.got = append(h.got, fmt.Sprint("edit ", line)) }
-func (h *fakeHost) Scrolled(line int)   { h.got = append(h.got, fmt.Sprint("scroll ", line)) }
-func (h *fakeHost) Log(msg string)      { h.got = append(h.got, "log "+msg) }
+func (h *fakeHost) Ready()                { h.got = append(h.got, "ready") }
+func (h *fakeHost) Drawn()                { h.got = append(h.got, "drawn") }
+func (h *fakeHost) OpenLink(url string)   { h.got = append(h.got, "link "+url) }
+func (h *fakeHost) EditLine(line int)     { h.got = append(h.got, fmt.Sprint("edit ", line)) }
+func (h *fakeHost) Scrolled(line float64) { h.got = append(h.got, fmt.Sprintf("scroll %.2f", line)) }
+func (h *fakeHost) Log(msg string)        { h.got = append(h.got, "log "+msg) }
 
 // take returns what was told since the last take.
 func (h *fakeHost) take() []string {
@@ -169,8 +170,8 @@ func TestScrolledTellsOnlyScrolling(t *testing.T) {
 	if len(got) != 1 || !strings.HasPrefix(got[0], "scroll ") {
 		t.Fatalf("Page Down told %q, want one scroll", got)
 	}
-	if want := fmt.Sprint("scroll ", p.TopLine()); got[0] != want || p.TopLine() <= 13 {
-		t.Errorf("Page Down told %q, top line is %d", got[0], p.TopLine())
+	if want := fmt.Sprintf("scroll %.2f", p.Top()); got[0] != want || p.Top() <= 13 {
+		t.Errorf("Page Down told %q, the top is at line %.2f", got[0], p.Top())
 	}
 
 	// Typing above the view keeps it where it was.
@@ -274,7 +275,7 @@ func TestAnchorLinkScrollsTheView(t *testing.T) {
 	if got := p.TopLine(); got != 63 {
 		t.Errorf("#section-15 put line %d at the top, want 63", got)
 	}
-	if got, want := host.take(), []string{"scroll 63"}; !slices.Equal(got, want) {
+	if got, want := host.take(), []string{"scroll 63.00"}; !slices.Equal(got, want) {
 		t.Errorf("#section-15 told %q, want %q", got, want)
 	}
 
@@ -493,5 +494,42 @@ func TestHelp(t *testing.T) {
 	frame()
 	if p.Help() {
 		t.Error("pointer press didn't close help")
+	}
+}
+
+// A line with a fraction goes that far through its block, and the view
+// tells where its top is the same way, so the editor and the view follow
+// each other smoothly rather than a block at a time.
+func TestFractionalLines(t *testing.T) {
+	p, host, _, r, frame := testPreview(t)
+	// Sections of a heading on line 4k+1, a blank line, a paragraph on
+	// line 4k+3 and a blank line: the paragraph takes lines 4k+3 to 4k+4.
+	p.SetSource(longDoc(20))
+	frame()
+	host.take()
+
+	p.ScrollToLine(19.5)
+	frame()
+	if got := p.Top(); math.Abs(got-19.5) > 0.05 {
+		t.Errorf("ScrollToLine(19.5) put line %.3f at the top", got)
+	}
+	if i, frac := p.view.TopBlock(); p.doc.Lines[i] != 19 || frac < 0.2 || frac > 0.3 {
+		t.Errorf("ScrollToLine(19.5): block on line %d at the top, %.2f scrolled past; want 19, a quarter", p.doc.Lines[i], frac)
+	}
+	if got := host.take(); len(got) != 0 {
+		t.Errorf("ScrollToLine told %q", got)
+	}
+
+	// The wheel, a few px at a time, tells each small move.
+	for i := range 3 {
+		r.Queue(pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: f32.Pt(400, 300), Scroll: f32.Pt(0, 10)})
+		frame()
+		got := host.take()
+		if len(got) != 1 || got[0] != fmt.Sprintf("scroll %.2f", p.Top()) {
+			t.Fatalf("step %d of 10 px told %q, the top is at %.2f", i, got, p.Top())
+		}
+	}
+	if top := p.Top(); top <= 19.5 || top >= 21 {
+		t.Errorf("30 px down from line 19.5 is line %.2f", top)
 	}
 }

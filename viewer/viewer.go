@@ -75,6 +75,12 @@ type Viewer struct {
 	// doesn't draw it again.
 	drawing draw.Cache
 
+	// anim eases the zoom and pan to where a key put them, rather than
+	// jumping there. stepZoom is a zoom StepZoom asked for, for the next
+	// layout, or 0.
+	anim     zoomAnim
+	stepZoom float32
+
 	// Callbacks
 	OnClose func()
 	OnEdit  func(index int)
@@ -282,12 +288,14 @@ func (v *Viewer) Layout(gtx layout.Context, th *material.Theme, oTheme *palette.
 	v.metric = gtx.Metric
 
 	if !v.fitted || size != v.lastSize {
+		v.anim.on = false
 		v.Fit(size.X, size.Y)
 		v.fitted = true
 		v.lastSize = size
 	}
 
 	v.handleEvents(gtx, size)
+	v.stepAnim(gtx)
 
 	// Background fill
 	paint.FillShape(gtx.Ops, oTheme.Background, clip.Rect(image.Rectangle{Max: size}).Op())
@@ -347,6 +355,7 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 		}
 		switch ev.Kind {
 		case pointer.Press:
+			v.anim.on = false
 			v.dragStart = ev.Position
 			v.panStart = v.Pan
 			v.moved = false
@@ -408,6 +417,7 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 				v.pointerPos = e.Position
 			case pointer.Scroll:
 				v.wakeInfo = true
+				v.anim.on = false
 				if e.Scroll.Y != 0 {
 					v.ZoomBy(wheelZoom(e.Scroll.Y/gtx.Metric.PxPerDp), e.Position)
 					gtx.Execute(op.InvalidateCmd{})
@@ -433,17 +443,17 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 					v.OnClose()
 				}
 			case "0":
-				v.Fit(size.X, size.Y)
+				v.ease(gtx, func() { v.Fit(size.X, size.Y) })
 			case "1":
-				v.Set100(size.X, size.Y)
+				v.ease(gtx, func() { v.Set100(size.X, size.Y) })
 			case "W":
-				v.FitWidth(size.X, size.Y)
+				v.ease(gtx, func() { v.FitWidth(size.X, size.Y) })
 			case "H":
-				v.FitHeight(size.X, size.Y)
+				v.ease(gtx, func() { v.FitHeight(size.X, size.Y) })
 			case "+", "=":
-				v.ZoomBy(1.2, p)
+				v.ease(gtx, func() { v.ZoomBy(1.2, p) })
 			case "-", "_":
-				v.ZoomBy(1.0/1.2, p)
+				v.ease(gtx, func() { v.ZoomBy(1.0/1.2, p) })
 			case "N":
 				v.ToggleSequenceNumbers()
 			case "[":
@@ -457,6 +467,88 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 			}
 		}
 	}
+
+	if f := v.stepZoom; f != 0 {
+		v.stepZoom = 0
+		v.wakeInfo = true
+		v.ease(gtx, func() { v.ZoomBy(f, center) })
+	}
+}
+
+// StepZoom zooms by factor around the middle of the viewer, eased, at its
+// next layout: for zoom actions from outside it, such as the IDE's.
+func (v *Viewer) StepZoom(factor float32) {
+	if v.stepZoom == 0 {
+		v.stepZoom = 1
+	}
+	v.stepZoom *= factor
+}
+
+// zoomTime is how long the zoom keys take to ease to their zoom.
+const zoomTime = 180 * time.Millisecond
+
+// zoomAnim eases the zoom and pan from one view of the diagram to
+// another.
+type zoomAnim struct {
+	on               bool
+	start            time.Time
+	fromZoom, toZoom float32
+	fromPan, toPan   f32.Point
+}
+
+// ease runs f, which sets the zoom and pan, and eases them there from
+// where they are rather than jumping. One under way goes on from where
+// it was going, so quick presses add up. Without a clock, as in tests,
+// it jumps.
+func (v *Viewer) ease(gtx layout.Context, f func()) {
+	zoom, pan := v.Zoom, v.Pan
+	if v.anim.on {
+		v.Zoom, v.Pan = v.anim.toZoom, v.anim.toPan
+	}
+	f()
+	if gtx.Now.IsZero() {
+		v.anim.on = false
+		return
+	}
+	v.anim = zoomAnim{on: true, start: gtx.Now, fromZoom: zoom, toZoom: v.Zoom, fromPan: pan, toPan: v.Pan}
+	v.Zoom, v.Pan = zoom, pan
+	gtx.Execute(op.InvalidateCmd{})
+}
+
+// stepAnim sets the zoom and pan for this frame of the easing, if one is
+// under way, and asks for the next.
+func (v *Viewer) stepAnim(gtx layout.Context) {
+	a := &v.anim
+	if !a.on {
+		return
+	}
+	t := float32(gtx.Now.Sub(a.start)) / float32(zoomTime)
+	if t >= 1 || gtx.Now.IsZero() {
+		v.Zoom, v.Pan = a.toZoom, a.toPan
+		a.on = false
+		return
+	}
+	t = max(t, 0)
+	// Ease out: quick at first, settling at the end.
+	e := 1 - (1-t)*(1-t)*(1-t)
+	v.Zoom, v.Pan = a.at(e)
+	gtx.Execute(op.InvalidateCmd{})
+}
+
+// at returns the zoom and pan a fraction e of the way. The zoom goes by
+// equal ratios, and the pan keeps still the point both ends show in the
+// same place, as zooming at a point does, so the view doesn't swing.
+func (a zoomAnim) at(e float32) (float32, f32.Point) {
+	z0, z1 := a.fromZoom, a.toZoom
+	p0, p1 := a.fromPan, a.toPan
+	z := z0 * float32(math.Pow(float64(z1/z0), float64(e)))
+	if math.Abs(float64(z1-z0)) < 1e-3*float64(z0) {
+		// The same zoom: only the pan moves.
+		return z, p0.Add(p1.Sub(p0).Mul(e))
+	}
+	// The fixed point q, on each axis: (q-p0)/z0 = (q-p1)/z1.
+	q := p0.Mul(z1).Sub(p1.Mul(z0)).Div(z1 - z0)
+	return z, q.Sub(q.Sub(p0).Mul(z / z0))
 }
 
 func (v *Viewer) drawDiagram(gtx layout.Context, th *material.Theme, seqTh seq.Theme, bg color.NRGBA, size image.Point) {

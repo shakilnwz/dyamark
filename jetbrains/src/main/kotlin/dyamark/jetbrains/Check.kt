@@ -185,7 +185,7 @@ object Check {
         m = mark()
         edt { ed.scrollingModel.scrollVertically(ed.logicalPositionToXY(LogicalPosition(79, 0)).y) }
         pause(1200)
-        val sentLine = since(m).lastOrNull { it.panel === panel && it.text.startsWith("out scrollToLine") }?.text?.substringAfterLast(' ')?.toIntOrNull()
+        val sentLine = since(m).lastOrNull { it.panel === panel && it.text.startsWith("out scrollToLine") }?.text?.substringAfterLast(' ')?.toDoubleOrNull()?.toInt()
         result(sentLine != null && abs(sentLine - 80) <= 1, 6, "scrolling the editor to line 80 scrolls the preview there", "scrollToLine $sentLine")
         val toldBack = since(m).filter { it.panel === panel && it.text.startsWith("in scroll ") }
         result(toldBack.isEmpty(), 6, "and the preview doesn't tell it back", toldBack.joinToString { it.text })
@@ -217,7 +217,7 @@ object Check {
         pause(1500)
         val eased = since(m).filter { it.panel === panel && it.text.startsWith("in scroll ") }
         note("6 notches told ${eased.size} top lines: ${eased.joinToString(" ") { it.text.substringAfterLast(' ') }}")
-        val scrolled = since(m).lastOrNull { it.panel === panel && it.text.startsWith("in scroll ") }?.text?.substringAfterLast(' ')?.toIntOrNull()
+        val scrolled = since(m).lastOrNull { it.panel === panel && it.text.startsWith("in scroll ") }?.text?.substringAfterLast(' ')?.toDoubleOrNull()?.toInt()
         val top = edt { topLine(ed) }
         result(scrolled != null, 6, "the mouse wheel on the preview scrolls it, and it tells the IDE", "scroll $scrolled")
         result(scrolled != null && abs(top - scrolled) <= 1, 6, "and the editor follows: its top line is the preview's", "editor $top, preview $scrolled")
@@ -237,7 +237,7 @@ object Check {
             m = mark()
             click(panel, links[0], page.scale)
             pause(1500)
-            val anchor = since(m).lastOrNull { it.panel === panel && it.text.startsWith("in scroll ") }?.text?.substringAfterLast(' ')?.toIntOrNull()
+            val anchor = since(m).lastOrNull { it.panel === panel && it.text.startsWith("in scroll ") }?.text?.substringAfterLast(' ')?.toDoubleOrNull()?.toInt()
             result(anchor == notes, 6, "a #anchor link scrolls the preview to its heading", "scroll $anchor, heading on $notes")
             result(since(m).none { it.text.startsWith("in link") }, 6, "and isn't sent to the IDE as a link")
             val shown = edt { visibleLines(ed) }

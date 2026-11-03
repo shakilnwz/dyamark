@@ -539,3 +539,53 @@ func TestWheelScrollsAtOnce(t *testing.T) {
 		t.Errorf("a 100 px notch scrolled %d px", got)
 	}
 }
+
+// wrappedView returns a view of 40 paragraphs, each several lines long,
+// laid out once, a router feeding it and a function laying out a frame.
+func wrappedView(t *testing.T) (*View, *input.Router, func()) {
+	t.Helper()
+	var src strings.Builder
+	for i := range 40 {
+		fmt.Fprintf(&src, "Paragraph %d. %s\n\n", i, strings.Repeat("Words to read and wrap. ", 30))
+	}
+	v := NewView(Parse([]byte(src.String()), nil))
+	r, frame := viewFrames(t, v)
+	frame()
+	return v, r, frame
+}
+
+// Zooming the text keeps the reader's place: the block at the top stays
+// as far scrolled past, as a share of its height, not in px.
+func TestTextZoomKeepsThePlace(t *testing.T) {
+	v, r, frame := wrappedView(t)
+	v.List.Position = layout.Position{First: 10}
+	frame()
+	h := v.heights[10]
+	v.List.Position = layout.Position{First: 10, Offset: h / 2}
+	frame()
+	for range 5 {
+		r.Queue(key.Event{Name: "=", Modifiers: key.ModCtrl, State: key.Press})
+		frame()
+	}
+	if v.TextScale < 1.45 {
+		t.Fatalf("the text scale is %v after five steps in", v.TextScale)
+	}
+	i, frac := v.TopBlock()
+	if i != 10 || math.Abs(float64(frac)-0.5) > 0.02 {
+		t.Errorf("after zooming in, block %d is at the top, %.2f of it scrolled past; want block 10, half", i, frac)
+	}
+	if v.heights[10] <= h {
+		t.Errorf("block 10 is %d px tall zoomed in, %d before", v.heights[10], h)
+	}
+}
+
+// ScrollTo puts a block at the top with a share of it scrolled past.
+func TestScrollTo(t *testing.T) {
+	v, _, frame := wrappedView(t)
+	v.ScrollTo(12, 0.25)
+	frame()
+	i, frac := v.TopBlock()
+	if i != 12 || math.Abs(float64(frac)-0.25) > 0.01 {
+		t.Errorf("ScrollTo(12, 0.25) put block %d at the top, %.3f scrolled past", i, frac)
+	}
+}

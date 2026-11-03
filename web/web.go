@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"strings"
 	"sync"
 
@@ -18,7 +19,6 @@ import (
 	"dyamark/seq/parse"
 	"dyamark/viewer"
 
-	"gioui.org/f32"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -41,10 +41,11 @@ type Host interface {
 	OpenLink(url string)
 	// EditLine asks to show the source at a line, 1-based.
 	EditLine(line int)
-	// Scrolled tells the first line of the block at the top of the view,
-	// 1-based, when scrolling in the view changes it; not when a new
-	// source or ScrollToLine does.
-	Scrolled(line int)
+	// Scrolled tells where the top of the view is in the source, as a
+	// line, 1-based, with the fraction of the way to the next, when
+	// scrolling in the view moves it; not when a new source or
+	// ScrollToLine does.
+	Scrolled(line float64)
 	// Log passes a message on for the IDE's log.
 	Log(msg string)
 }
@@ -82,9 +83,10 @@ type Preview struct {
 	// loaded is whether this frame shows a new source; moved whether a
 	// new source or ScrollToLine moved the view.
 	loaded, moved bool
-	// topLine is the first line of the block at the top of the view, as
-	// last told or set.
-	topLine int
+	// top is where the top of the view is in the source, as last told or
+	// set; lines is how many lines the source has.
+	top   float64
+	lines int
 
 	help bool
 }
@@ -153,9 +155,10 @@ func (p *Preview) SetTheme(data string) error {
 	return nil
 }
 
-// ScrollToLine puts the block holding line, 1-based, at the top of the
-// view.
-func (p *Preview) ScrollToLine(line int) {
+// ScrollToLine puts line, 1-based, at the top of the view: its block,
+// scrolled as far through as line, with its fraction, is through the
+// block's lines.
+func (p *Preview) ScrollToLine(line float64) {
 	p.post(func() { p.scrollToLine(line) })
 }
 
@@ -198,6 +201,7 @@ func (p *Preview) load(text string) {
 		p.viewerPos = pos
 	}
 	p.doc = markdown.Parse([]byte(text), p.cache)
+	p.lines = strings.Count(text, "\n") + 1
 	// Only this text's diagrams stay cached, not each version typed.
 	p.cache.Prune()
 	p.view.SetDocument(p.doc)
@@ -279,14 +283,30 @@ func (p *Preview) setTheme(t *palette.Theme) {
 	}
 }
 
-func (p *Preview) scrollToLine(line int) {
-	i := p.doc.BlockAt(line)
+func (p *Preview) scrollToLine(line float64) {
+	i := p.doc.BlockAt(int(line))
 	if i < 0 {
 		return
 	}
-	p.view.List.Position = layout.Position{First: i}
+	start, end := p.lineSpan(i)
+	p.view.ScrollTo(i, float32((line-start)/(end-start)))
 	p.moved = true
 }
+
+// lineSpan returns the lines block i takes in the source, to the next
+// block's first: from start up to end.
+func (p *Preview) lineSpan(i int) (start, end float64) {
+	start = float64(p.doc.Lines[i])
+	end = float64(p.lines + 1)
+	if i+1 < len(p.doc.Lines) {
+		end = float64(p.doc.Lines[i+1])
+	}
+	return start, max(end, start+1)
+}
+
+// minScroll is the least change of the view's top, in lines, that's told:
+// a few px of the editor's.
+const minScroll = 0.02
 
 // scrollToAnchor puts the heading a link's fragment names at the top of
 // the view. Unlike ScrollToLine, it is the reader's own scrolling, so the
@@ -343,8 +363,8 @@ func (p *Preview) Layout(gtx layout.Context) layout.Dimensions {
 		dims = p.viewer.Layout(gtx, p.th, p.theme)
 	} else {
 		dims = p.view.Layout(gtx, p.th, p.mdTheme)
-		if top := p.TopLine(); top != p.topLine {
-			p.topLine = top
+		if top := p.Top(); math.Abs(top-p.top) >= minScroll {
+			p.top = top
 			if !p.moved {
 				p.host.Scrolled(top)
 			}
@@ -381,27 +401,41 @@ func (p *Preview) TopLine() int {
 	return p.doc.Lines[i]
 }
 
+// Top returns where the top of the view is in the source: the line of
+// the block at the top, 1-based, and on through the block's lines as far
+// as the view is through its height. It's 0 when the document is empty.
+func (p *Preview) Top() float64 {
+	i, frac := p.view.TopBlock()
+	if i < 0 || i >= len(p.doc.Lines) {
+		return 0
+	}
+	start, end := p.lineSpan(i)
+	return start + float64(frac)*(end-start)
+}
+
 // Viewing reports whether the viewer is open.
 func (p *Preview) Viewing() bool {
 	return p.viewing
 }
 
-// ZoomIn increases text size in the view, or zooms in the viewer.
+// ZoomIn increases text size in the view, or zooms in the viewer, at
+// its middle.
 func (p *Preview) ZoomIn() {
 	p.post(func() {
 		if p.viewing {
-			p.viewer.ZoomBy(1.2, f32.Pt(0, 0))
+			p.viewer.StepZoom(1.2)
 		} else {
 			p.view.ZoomTextIn()
 		}
 	})
 }
 
-// ZoomOut decreases text size in the view, or zooms out the viewer.
+// ZoomOut decreases text size in the view, or zooms out the viewer, at
+// its middle.
 func (p *Preview) ZoomOut() {
 	p.post(func() {
 		if p.viewing {
-			p.viewer.ZoomBy(1/1.2, f32.Pt(0, 0))
+			p.viewer.StepZoom(1 / 1.2)
 		} else {
 			p.view.ZoomTextOut()
 		}

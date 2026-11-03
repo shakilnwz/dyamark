@@ -117,4 +117,16 @@ class DyamarkPanelTest {
         assertEquals("dyamark", DyamarkPanelProvider.INFO.name)
         assertEquals(DyamarkPanelProvider::class.java.name, DyamarkPanelProvider.INFO.className)
     }
+
+    @Test
+    fun testJsLineHasAPointInAnyLocale() {
+        val before = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.GERMANY)
+            assertEquals("31.420", jsLine(31.42))
+            assertEquals("1.000", jsLine(1.0))
+        } finally {
+            java.util.Locale.setDefault(before)
+        }
+    }
 }

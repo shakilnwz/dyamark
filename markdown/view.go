@@ -62,6 +62,19 @@ type View struct {
 	// zoomWheel adds up a Ctrl+wheel's scrolling, in dp, towards a text
 	// zoom step.
 	zoomWheel float32
+
+	// anchor, when set, is the place to put at the top of the view at
+	// the next layout.
+	anchor *anchorAt
+	// laidScale is the text scale the blocks were last laid out at.
+	laidScale float32
+}
+
+// anchorAt is a place in the document: a block, and how far down it, as
+// a fraction of its height.
+type anchorAt struct {
+	block int
+	frac  float32
 }
 
 const (
@@ -97,6 +110,22 @@ func (v *View) blockSpan(i int) (top, h int, ok bool) {
 		top -= v.heights[k] + v.List.Gap
 	}
 	return top, h, true
+}
+
+// ScrollTo puts block i at the top of the view at the next layout, with
+// frac of its height, from 0 to 1, scrolled past.
+func (v *View) ScrollTo(i int, frac float32) {
+	v.anchor = &anchorAt{i, min(max(frac, 0), 1)}
+}
+
+// TopBlock returns the block at the top of the view, as last laid out,
+// and the fraction of its height scrolled past.
+func (v *View) TopBlock() (i int, frac float32) {
+	p := v.List.Position
+	if h := v.heights[p.First]; h > 0 {
+		frac = min(max(float32(p.Offset)/float32(h), 0), 1)
+	}
+	return p.First, frac
 }
 
 // ShowBlock scrolls block i into view at the next layout, as little as
@@ -356,6 +385,17 @@ func abs(f float32) float32 {
 	return float32(math.Abs(float64(f)))
 }
 
+// measure returns block i's height in the column gtx is for, without
+// drawing it.
+func (v *View) measure(gtx layout.Context, th *material.Theme, oTheme *Theme, i int) int {
+	w := gtx.Constraints.Max.X
+	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1e6)}
+	m := op.Record(gtx.Ops)
+	dims := v.Doc.Blocks[i].Layout(gtx, th, oTheme)
+	m.Stop()
+	return dims.Size.Y
+}
+
 // visibleBlocks returns the blocks on screen in the last frame.
 func (v *View) visibleBlocks() []Block {
 	first := v.List.Position.First
@@ -518,19 +558,34 @@ func (v *View) Layout(gtx layout.Context, th *material.Theme, oTheme *Theme) lay
 		}
 	}
 
+	// A new text scale keeps the block at the top where it was, as a
+	// share of its height rather than in px, so the reader's place stays.
+	if v.laidScale != 0 && v.TextScale != v.laidScale && v.anchor == nil {
+		i, frac := v.TopBlock()
+		v.anchor = &anchorAt{i, frac}
+	}
 	if v.heights == nil {
 		v.heights = make(map[int]int)
 	}
 	clear(v.heights)
 	v.laidDoc = v.Doc
-	v.ease(gtx)
 	n := len(v.Doc.Blocks)
+	if a := v.anchor; a != nil {
+		v.anchor = nil
+		if a.block >= 0 && a.block < n {
+			h := v.measure(colGtx, th, oTheme, a.block)
+			v.List.Position = layout.Position{First: a.block, Offset: int(math.Round(float64(a.frac) * float64(h)))}
+			v.stopScroll()
+		}
+	}
+	v.ease(gtx)
 	dims := v.List.Layout(colGtx, n, func(gtx layout.Context, i int) layout.Dimensions {
 		dims := v.Doc.Blocks[i].Layout(gtx, th, oTheme)
 		v.heights[i] = dims.Size.Y
 		return dims
 	})
 	v.laidPos = v.List.Position
+	v.laidScale = v.TextScale
 	// At either end, the rest of the way goes nowhere.
 	if p := v.List.Position; v.scrollLeft < 0 && p.First == 0 && p.Offset == 0 || v.scrollLeft > 0 && !p.BeforeEnd {
 		v.stopScroll()

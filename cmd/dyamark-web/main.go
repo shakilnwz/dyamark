@@ -9,16 +9,19 @@
 //	setSource(text)     the whole document, on each change
 //	setTheme(json)      the palette, as web.Colors; returns an error's
 //	                    text, or null
-//	scrollToLine(line)  puts the block holding line, 1-based, at the top
+//	scrollToLine(line)  puts line, 1-based, at the top; a fraction goes
+//	                    as far on through the line's block
 //
 // dyamark answers through the page's dyamarkSend(message), one message
 // each: "ready" with the first frame, "drawn" with the frame that first
-// shows a new source, "link URL", "edit LINE", "scroll LINE", "log TEXT"
-// and "error TEXT".
+// shows a new source, "link URL", "edit LINE", "scroll LINE" (the line at
+// the top, with a fraction, such as "scroll 31.42"), "log TEXT" and
+// "error TEXT".
 package main
 
 import (
 	"fmt"
+	"strconv"
 	"syscall/js"
 
 	"dyamark/fonts"
@@ -55,7 +58,7 @@ func main() {
 		}),
 		"scrollToLine": js.FuncOf(func(_ js.Value, args []js.Value) any {
 			if len(args) > 0 {
-				p.ScrollToLine(args[0].Int())
+				p.ScrollToLine(args[0].Float())
 			}
 			return nil
 		}),
@@ -101,12 +104,12 @@ func run(w *app.Window, p *web.Preview) {
 // the plugin.
 type host struct{}
 
-func (host) Ready()              { send("ready") }
-func (host) Drawn()              { send("drawn") }
-func (host) OpenLink(url string) { send("link " + url) }
-func (host) EditLine(line int)   { send(fmt.Sprint("edit ", line)) }
-func (host) Scrolled(line int)   { send(fmt.Sprint("scroll ", line)) }
-func (host) Log(msg string)      { send("log " + msg) }
+func (host) Ready()                { send("ready") }
+func (host) Drawn()                { send("drawn") }
+func (host) OpenLink(url string)   { send("link " + url) }
+func (host) EditLine(line int)     { send(fmt.Sprint("edit ", line)) }
+func (host) Scrolled(line float64) { send("scroll " + strconv.FormatFloat(line, 'f', 2, 64)) }
+func (host) Log(msg string)        { send("log " + msg) }
 
 func send(msg string) {
 	if f := js.Global().Get("dyamarkSend"); f.Type() == js.TypeFunction {

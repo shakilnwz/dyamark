@@ -2,6 +2,7 @@ package dyamark.jetbrains
 
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.EDT
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.LogicalPosition
@@ -18,19 +19,25 @@ import com.intellij.openapi.wm.IdeFocusManager
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefBrowserBase
 import com.intellij.ui.jcef.JBCefJSQuery
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
-import org.intellij.plugins.markdown.ui.preview.accessor.MarkdownLinkOpener
 import org.intellij.plugins.markdown.ui.preview.MarkdownEditorWithPreview
 import org.intellij.plugins.markdown.ui.preview.MarkdownHtmlPanel
+import org.intellij.plugins.markdown.ui.preview.accessor.MarkdownLinkOpener
+import java.awt.Point
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.nio.file.Path
+import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.swing.JComponent
 import javax.swing.SwingUtilities
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
 private val LOG = logger<DyamarkPanel>()
 
@@ -50,7 +57,7 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
     private var currentSource: String? = null
     private var currentFile: VirtualFile? = file
     private var currentPath: Path? = runCatching { file?.toNioPath() }.getOrNull()
-    private var pendingScrollLine: Int? = null
+    private var pendingScrollLine: Double? = null
     // The Markdown plugin hands every setHtml the caret's offset; like its
     // JCEF panel, only the first one places the view.
     private var firstUpdate = true
@@ -154,14 +161,14 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
     private fun push(html: String, initialScrollOffset: Int = 0) {
         Spike.sourceSent(this)
         val sendNow: Boolean
-        val scrollLine: Int?
+        val scrollLine: Double?
         synchronized(lock) {
             currentSource = html
             sendNow = ready
             if (firstUpdate) {
                 firstUpdate = false
                 if (initialScrollOffset > 0) {
-                    pendingScrollLine = offsetToLine(initialScrollOffset)
+                    pendingScrollLine = offsetToLine(initialScrollOffset)?.toDouble()
                 }
             }
             scrollLine = if (sendNow) pendingScrollLine else null
@@ -200,7 +207,7 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
             // The source and this line are sent again on the reloaded
             // page's ready.
             synchronized(lock) {
-                pendingScrollLine = offsetToLine(offset)
+                pendingScrollLine = offsetToLine(offset)?.toDouble()
             }
             browser.cefBrowser.reload()
         }
@@ -213,13 +220,32 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
         scrollToLine(line)
     }
 
-    /** The editor scrolled, with "synchronise scrolling" on: [line] is its top line, 0-based. */
-    override suspend fun scrollTo(editor: Editor, line: Int) {
-        if (System.nanoTime() < ignoreEditorScrollUntil) return
-        scrollToLine(line + 1)
+    /** Where the top of [editor]'s view is: its top line, 1-based, with the fraction of it scrolled past. */
+    private fun editorTop(editor: Editor): Double {
+        val y = editor.scrollingModel.verticalScrollOffset
+        val line = editor.xyToLogicalPosition(Point(0, y)).line
+        val top = editor.logicalPositionToXY(LogicalPosition(line, 0)).y
+        val next = editor.logicalPositionToXY(LogicalPosition(line + 1, 0)).y
+        val frac = if (next > top) ((y - top).toDouble() / (next - top)).coerceIn(0.0, 0.999) else 0.0
+        return line + 1 + frac
     }
 
-    fun scrollToLine(line: Int) {
+    /**
+     * The editor scrolled, with "synchronise scrolling" on: [line] is its
+     * top line, 0-based. The preview is sent where the editor's top is to
+     * the px, as a line with a fraction, so it follows smoothly rather
+     * than a line at a time.
+     */
+    override suspend fun scrollTo(editor: Editor, line: Int) {
+        if (System.nanoTime() < ignoreEditorScrollUntil) return
+        val top = withContext(Dispatchers.EDT) { if (editor.isDisposed) null else editorTop(editor) }
+        scrollToLine(top ?: (line + 1.0))
+    }
+
+    fun scrollToLine(line: Int) = scrollToLine(line.toDouble())
+
+    /** Puts [line], 1-based, at the preview's top; a fraction goes as far on through its block. */
+    fun scrollToLine(line: Double) {
         val sendNow: Boolean
         synchronized(lock) {
             if (!ready) {
@@ -230,24 +256,30 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
             }
         }
         if (sendNow) {
-            Check.event(this, "out scrollToLine $line")
-            executeJs("if (globalThis.dyamark?.scrollToLine) dyamark.scrollToLine($line);")
+            val n = jsLine(line)
+            Check.event(this, "out scrollToLine $n")
+            executeJs("if (globalThis.dyamark?.scrollToLine) dyamark.scrollToLine($n);")
         }
     }
 
     /**
-     * The reader scrolled the preview so that [line], 1-based, starts the
-     * block at its top. The Markdown plugin only syncs from the editor to
-     * the preview (nothing in 2026.2 listens to a panel's
-     * [MarkdownHtmlPanel.ScrollListener]s), so the panel scrolls its
-     * editor itself, when that editor's "synchronise scrolling" is on.
+     * The reader scrolled the preview so that its top is at [line],
+     * 1-based, with the fraction of the way to the next. The Markdown
+     * plugin only syncs from the editor to the preview (nothing in 2026.2
+     * listens to a panel's [MarkdownHtmlPanel.ScrollListener]s), so the
+     * panel scrolls its editor itself, when that editor's "synchronise
+     * scrolling" is on.
      */
-    private fun previewScrolled(line: Int) {
+    private fun previewScrolled(line: Double) {
+        val whole = floor(line).toInt()
         val split = splitEditor()
         if (split != null && split.isAutoScrollPreview) {
             val editor = split.editor
-            val lineIndex = (line - 1).coerceIn(0, maxOf(editor.document.lineCount - 1, 0))
-            val y = editor.logicalPositionToXY(LogicalPosition(lineIndex, 0)).y
+            val lineIndex = (whole - 1).coerceIn(0, maxOf(editor.document.lineCount - 1, 0))
+            val top = editor.logicalPositionToXY(LogicalPosition(lineIndex, 0)).y
+            val next = editor.logicalPositionToXY(LogicalPosition(lineIndex + 1, 0)).y
+            val span = if (next > top) next - top else editor.lineHeight
+            val y = top + ((line - whole).coerceIn(0.0, 1.0) * span).roundToInt()
             ignoreEditorScrollUntil = System.nanoTime() + ECHO_NANOS
             val scrolling = editor.scrollingModel
             scrolling.disableAnimation()
@@ -255,7 +287,7 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
             scrolling.enableAnimation()
             Check.event(this, "editor scrolled to ${lineIndex + 1}")
         }
-        val offset = lineToOffset(line) ?: 0
+        val offset = lineToOffset(whole) ?: 0
         for (listener in scrollListeners) {
             listener.onScroll(offset)
         }
@@ -386,7 +418,7 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
                 if (scrollLine != null) scrollToLine(scrollLine)
             }
             message.startsWith("scroll ") -> {
-                val line = message.removePrefix("scroll ").trim().toIntOrNull()
+                val line = message.removePrefix("scroll ").trim().toDoubleOrNull()
                 if (line != null && line > 0) {
                     ApplicationManager.getApplication().invokeLater {
                         if (!isPanelDisposed) previewScrolled(line)
@@ -450,6 +482,9 @@ private const val FRAME_RATE_KEY = "ide.browser.jcef.osr.framerate"
 
 // The most Chromium draws an off-screen browser at.
 private const val FRAME_RATE = 60
+
+/** Writes [line] as a JavaScript number, with a point whatever the locale. */
+internal fun jsLine(line: Double): String = String.format(Locale.ROOT, "%.3f", line)
 
 /** Quotes [s] as a JavaScript string literal. */
 internal fun jsString(s: String): String = buildString(s.length + 16) {
