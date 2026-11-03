@@ -1,7 +1,7 @@
 # Status
 
 Where dyamark stands against [the plan](plan.md), phase by phase.
-Last updated 2026-11-02, at v1.3.0.
+Last updated 2026-11-03, at v1.4.0.
 
 | Phase | | State |
 |---|---|---|
@@ -20,12 +20,13 @@ Last updated 2026-11-02, at v1.3.0.
 
 | Tag | Date | Assets |
 |---|---|---|
+| v1.4.0 | 2026-11-03 | Arch `.pkg.tar.zst`, `.deb`, `.rpm`, Windows `.exe`, JetBrains plugin `.zip` |
 | v1.3.0 | 2026-11-02 | Arch `.pkg.tar.zst`, `.deb`, `.rpm`, Windows `.exe`, JetBrains plugin `.zip` |
 | v1.2.0 | 2026-10-28 | Arch, `.deb`, `.rpm`, Windows |
 | v1.1.0 | 2026-10-28 | Arch, `.deb`, `.rpm`, Windows |
 | v1.0.0 | 2026-10-28 | Arch, `.deb`, `.rpm`, Windows |
 
-All four were built and published by `.github/workflows/release.yml`.
+All five were built and published by `.github/workflows/release.yml`.
 
 ## Phase notes
 
@@ -109,8 +110,11 @@ libraries; Go's own heap is about 10 MB.
 **Phase 8 (PhpStorm / JetBrains plugin):** shipped in v1.3.0. Steps 1–8 of
 [its plan](plans/2026-11-01-phpstorm-plugin.md) are done and steps 4–7
 were checked in PhpStorm with `./gradlew runIde -Pcheck`. The release
-workflow built the plugin zip for v1.3.0. Not checked yet: the zip
-installed into a clean PhpStorm.
+workflow built the plugin zip for v1.3.0. v1.4.0 makes the preview
+smooth: 60 fps instead of JCEF's off-screen 30, eased wheel scrolling,
+cached diagrams, eased zoom in the viewer, text zoom that keeps the
+place, and scroll sync in fractions of a line. Not checked yet: the zip
+installed into a clean PhpStorm, and a touchpad in the IDE.
 
 ## Planned next
 
