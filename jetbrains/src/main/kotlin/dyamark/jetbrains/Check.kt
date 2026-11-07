@@ -3,6 +3,11 @@ package dyamark.jetbrains
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.notification.Notification
 import com.intellij.notification.Notifications
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.ActionUiKind
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.ex.ActionUtil
+import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -358,7 +363,11 @@ object Check {
                 return
             }
             m = mark()
-            edt { Notification.fire(notification, use, null) }
+            edt {
+                val context = SimpleDataContext.getSimpleContext(Notification.KEY, notification)
+                val event = AnActionEvent.createEvent(context, null, ActionPlaces.NOTIFICATION, ActionUiKind.NONE, null)
+                ActionUtil.performAction(use, event)
+            }
             result(edt { settings.previewPanelProviderInfo } == DyamarkPanelProvider.INFO, 7, "its Use Dyamark makes dyamark the preview")
             val back = waitFor(m, 20_000) { it.panel.virtualFile == apiMd && it.text == "in drawn" }
             result(back != null, 7, "and swaps the open preview (api.md) back to dyamark")
