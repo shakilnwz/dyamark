@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -462,6 +463,42 @@ func TestSmoothWheelScroll(t *testing.T) {
 	settle(t, v, frame)
 	if got := scrolled(); got != 300 {
 		t.Errorf("three 100 px notches scrolled %d px, want 300", got)
+	}
+}
+
+// A notch starts gently and picks up speed, rather than making its biggest
+// move on its first frame.
+func TestSmoothWheelStartsGently(t *testing.T) {
+	v, r, frame, scrolled := smoothView(t)
+	wheel(r, 120)
+	frame()
+	first := scrolled()
+	frame()
+	second := scrolled() - first
+	if first <= 0 || second <= first {
+		t.Errorf("a notch moved %d px on its first frame and %d px on its second", first, second)
+	}
+	settle(t, v, frame)
+}
+
+// Notches in a row run together at an even speed: once under way, the view
+// doesn't stop and start with each one.
+func TestSmoothWheelKeepsAnEvenSpeed(t *testing.T) {
+	_, r, frame, scrolled := smoothView(t)
+	var steps []int
+	last := 0
+	for i := range 48 {
+		if i%4 == 0 {
+			wheel(r, 120)
+		}
+		frame()
+		steps = append(steps, scrolled()-last)
+		last = scrolled()
+	}
+	under := steps[24:]
+	lo, hi := slices.Min(under), slices.Max(under)
+	if lo <= 0 || float64(hi)/float64(lo) > 1.6 {
+		t.Errorf("steps went from %d to %d px per frame: %v", lo, hi, under)
 	}
 }
 

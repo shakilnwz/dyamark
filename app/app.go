@@ -226,6 +226,7 @@ func New(opts Options) (*App, error) {
 
 	doc := markdown.Parse(source, cache)
 	mdView := markdown.NewView(doc)
+	mdView.SmoothScroll = true
 
 	// Collect initial ASTs for the viewer
 	var initialASTs []*parse.Diagram

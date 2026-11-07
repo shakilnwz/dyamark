@@ -34,6 +34,7 @@ import java.awt.event.MouseEvent
 import java.nio.file.Path
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JComponent
 import javax.swing.SwingUtilities
 import kotlin.math.floor
@@ -69,6 +70,10 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
     // the block's start at the top would undo the reader's scrolling.
     @Volatile
     private var ignoreEditorScrollUntil = 0L
+
+    // The newest place the preview told it scrolled to, until the EDT takes
+    // it: the editor only needs to catch up with the last one.
+    private val scrolledTo = AtomicReference<Double?>(null)
 
     init {
         Disposer.register(this, browser)
@@ -404,7 +409,7 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
 
     private fun onMessage(message: String) {
         if (isPanelDisposed || browser.isDisposed) return
-        LOG.info("dyamark ${file?.name}: $message")
+        if (!message.startsWith("scroll ")) LOG.info("dyamark ${file?.name}: $message")
         when {
             message.startsWith("ready") -> {
                 val (text, scrollLine) = synchronized(lock) {
@@ -419,9 +424,10 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
             }
             message.startsWith("scroll ") -> {
                 val line = message.removePrefix("scroll ").trim().toDoubleOrNull()
-                if (line != null && line > 0) {
+                if (line != null && line > 0 && scrolledTo.getAndSet(line) == null) {
                     ApplicationManager.getApplication().invokeLater {
-                        if (!isPanelDisposed) previewScrolled(line)
+                        val latest = scrolledTo.getAndSet(null)
+                        if (latest != null && !isPanelDisposed) previewScrolled(latest)
                     }
                 }
             }
@@ -470,17 +476,17 @@ class DyamarkPanel(private val project: Project?, private val file: VirtualFile?
 }
 
 /**
- * The off-screen browser's frame rate. The IDE's registry leaves
- * `ide.browser.jcef.osr.framerate` at 0, which is Chromium's default of
- * 30 fps: too few for smooth scrolling, panning and zooming. A rate set
- * there is kept.
+ * The off-screen browser's frame rate: what the IDE's registry has for
+ * `ide.browser.jcef.osr.framerate`, which is 120 from 2026.3 or a rate set by
+ * hand. 2026.2 leaves it at 0, which is Chromium's default of 30 fps: too few
+ * for smooth scrolling, panning and zooming.
  */
 private fun frameRate(): Int =
     Registry.intValue(FRAME_RATE_KEY, 0).takeIf { it > 0 } ?: FRAME_RATE
 
 private const val FRAME_RATE_KEY = "ide.browser.jcef.osr.framerate"
 
-// The most Chromium draws an off-screen browser at.
+// The rate when the registry leaves it at 0.
 private const val FRAME_RATE = 60
 
 /** Writes [line] as a JavaScript number, with a point whatever the locale. */

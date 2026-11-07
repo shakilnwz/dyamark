@@ -28,9 +28,8 @@ type View struct {
 	// and R) while another widget, the editor, takes the typing: a typed
 	// letter arrives as both text and a key press.
 	NoPlainKeys bool
-	// SmoothScroll eases the wheel's notches and the reading keys over a
-	// few frames instead of jumping; a touchpad's small steps still move
-	// the view at once.
+	// SmoothScroll eases the wheel's notches and the reading keys instead
+	// of jumping; a touchpad's small steps still move the view at once.
 	SmoothScroll bool
 
 	OnOpenViewer    func(block *SequenceBlock)
@@ -51,9 +50,10 @@ type View struct {
 	laidDoc *ParsedDocument
 
 	// scrollLeft is how far, in px, the eased scrolling has still to go,
-	// and scrollAt the frame it last moved. scrollFrac is the part of a
-	// px scrolled but not shown yet.
+	// scrollVel how fast it's going, in px/s, and scrollAt the frame it
+	// last moved. scrollFrac is the part of a px scrolled but not shown yet.
 	scrollLeft float32
+	scrollVel  float32
 	scrollAt   time.Time
 	scrollFrac float32
 	// laidPos is where the list was after the last layout. When it has
@@ -78,17 +78,17 @@ type anchorAt struct {
 }
 
 const (
-	// easeNotch is the least wheel scrolling, in dp, that's eased: half
-	// a notch in the IDE's browser, which gets 120 px for one. A
-	// touchpad's smaller steps move the view at once.
-	easeNotch = 60
+	// easeNotch is the least wheel scrolling, in dp, that's eased: under
+	// a notch, which is 120 px in the IDE's browser and 50 dp or more in
+	// the app. A touchpad's smaller steps move the view at once.
+	easeNotch = 40
 	// zoomNotch is the Ctrl+wheel scrolling, in dp, that zooms the text a
 	// step: a notch is 120 px in the IDE's browser, and 50 dp or more in
 	// the app. A touchpad's smaller steps add up to one.
 	zoomNotch = 40
 	// easeTime is the eased scrolling's time constant: it covers 90% of
-	// the way in about 2.3 of them.
-	easeTime = 40 * time.Millisecond
+	// the way in about 3.9 of them.
+	easeTime = 30 * time.Millisecond
 	// frameTime is the time an eased frame is taken to be when there's
 	// no clock: its first frame, and in tests.
 	frameTime = 16 * time.Millisecond
@@ -320,7 +320,7 @@ func (v *View) scroll(d, notch float32) {
 	}
 	if d*v.scrollLeft < 0 {
 		// Turned back: the rest of the way the other way is dropped.
-		v.scrollLeft = 0
+		v.scrollLeft, v.scrollVel = 0, 0
 	}
 	if v.scrollLeft == 0 {
 		v.scrollAt = time.Time{}
@@ -338,11 +338,14 @@ func (v *View) moveBy(d float32) {
 
 // stopScroll drops what's left of the eased scrolling.
 func (v *View) stopScroll() {
-	v.scrollLeft, v.scrollFrac = 0, 0
+	v.scrollLeft, v.scrollVel, v.scrollFrac = 0, 0, 0
 }
 
 // ease moves the eased scrolling on by the time since its last frame,
-// and asks for another frame while there's more of it.
+// and asks for another frame while there's more of it. It moves as a
+// critically damped spring does towards where the scrolling is going: the
+// speed changes gradually, so notches in a row run together at an even
+// speed rather than each starting with a jolt, and it never overshoots.
 func (v *View) ease(gtx layout.Context) {
 	if v.scrollLeft == 0 {
 		return
@@ -352,15 +355,20 @@ func (v *View) ease(gtx layout.Context) {
 		dt = min(max(gtx.Now.Sub(v.scrollAt), 0), 3*frameTime)
 	}
 	v.scrollAt = gtx.Now
-	step := v.scrollLeft * float32(1-math.Exp(-dt.Seconds()/easeTime.Seconds()))
-	if abs(v.scrollLeft-step) < 1 {
+	w := float32(1 / easeTime.Seconds())
+	t := float32(dt.Seconds())
+	decay := float32(math.Exp(float64(-w * t)))
+	c := v.scrollVel - w*v.scrollLeft
+	left := (v.scrollLeft - c*t) * decay
+	if abs(left) < 0.5 {
 		// The last of it, to the whole px.
 		v.List.Position.Offset += int(math.Round(float64(v.scrollLeft + v.scrollFrac)))
 		v.stopScroll()
 		return
 	}
-	v.scrollLeft -= step
-	v.moveBy(step)
+	v.moveBy(v.scrollLeft - left)
+	v.scrollLeft = left
+	v.scrollVel = (v.scrollVel - c*w*t) * decay
 	gtx.Execute(op.InvalidateCmd{})
 }
 
