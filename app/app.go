@@ -172,7 +172,8 @@ deactivate API
 - **Ctrl+O**: Open a file
 - **Enter** or **Click**: Open diagram in fullscreen viewer
 - **0** / **1** / **W** / **H**: Fit to window / 100% / Fit width / Fit height (in viewer)
-- **+** / **-** or **Scroll**: Zoom in / out at pointer
+- **Scroll** / **Shift+Scroll**: Move the diagram up and down / sideways (in viewer)
+- **+** / **-** or **Ctrl+Scroll**: Zoom in / out at pointer
 - **N**: Toggle sequence numbers
 - **Click a participant**: Show only what it takes part in (in viewer)
 - **Esc**: Show all again / close viewer

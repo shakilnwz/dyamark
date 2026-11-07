@@ -31,6 +31,8 @@ var (
 		{"Ctrl+=  Ctrl+-  Ctrl+0", "Text size"},
 	}}
 	helpViewer = helpGroup{"Diagram viewer", [][2]string{
+		{"Scroll  Shift+Scroll", "Move up and down, sideways"},
+		{"Ctrl+Scroll", "Zoom at the pointer"},
 		{"+  -", "Zoom in, out"},
 		{"0  1", "Fit, 100 %"},
 		{"W  H", "Fit width, fit height"},

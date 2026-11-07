@@ -214,12 +214,11 @@ func (v *Viewer) Fit(winW, winH int) {
 	if v.Diagram == nil || v.Diagram.ViewBox.W <= 0 || v.Diagram.ViewBox.H <= 0 {
 		return
 	}
-	const pad = float32(32.0)
 	diagW := float32(v.Diagram.ViewBox.W)
 	diagH := float32(v.Diagram.ViewBox.H)
 
-	availW := float32(winW) - 2*pad
-	availH := float32(winH) - 2*pad
+	availW := float32(winW) - 2*fitPad
+	availH := float32(winH) - 2*fitPad
 	if availW <= 0 || availH <= 0 {
 		return
 	}
@@ -240,15 +239,14 @@ func (v *Viewer) FitWidth(winW, winH int) {
 	if v.Diagram == nil || v.Diagram.ViewBox.W <= 0 {
 		return
 	}
-	const pad = float32(32.0)
 	diagW := float32(v.Diagram.ViewBox.W)
-	availW := float32(winW) - 2*pad
+	availW := float32(winW) - 2*fitPad
 	if availW <= 0 {
 		return
 	}
 	v.Zoom = availW / diagW
-	v.Pan.X = pad
-	v.Pan.Y = pad
+	v.Pan.X = fitPad
+	v.Pan.Y = fitPad
 }
 
 // FitHeight fits the diagram height to the window height.
@@ -256,15 +254,14 @@ func (v *Viewer) FitHeight(winW, winH int) {
 	if v.Diagram == nil || v.Diagram.ViewBox.H <= 0 {
 		return
 	}
-	const pad = float32(32.0)
 	diagH := float32(v.Diagram.ViewBox.H)
-	availH := float32(winH) - 2*pad
+	availH := float32(winH) - 2*fitPad
 	if availH <= 0 {
 		return
 	}
 	v.Zoom = availH / diagH
 	v.Pan.X = (float32(winW) - float32(v.Diagram.ViewBox.W)*v.Zoom) / 2
-	v.Pan.Y = pad
+	v.Pan.Y = fitPad
 }
 
 // Set100 resets zoom to 100% and centers the diagram.
@@ -416,6 +413,10 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 			case pointer.Move:
 				v.pointerPos = e.Position
 			case pointer.Scroll:
+				if !e.Modifiers.Contain(key.ModCtrl) {
+					v.scroll(gtx, e.Scroll, size)
+					break
+				}
 				v.wakeInfo = true
 				v.anim.on = false
 				if e.Scroll.Y != 0 {
@@ -473,6 +474,50 @@ func (v *Viewer) handleEvents(gtx layout.Context, size image.Point) {
 		v.wakeInfo = true
 		v.ease(gtx, func() { v.ZoomBy(f, center) })
 	}
+}
+
+// scroll moves the diagram by d px of scrolling, the way the reading view
+// moves its page, as far as the diagram's edges. A wheel's notches are
+// eased; a touchpad's small steps move it at once.
+func (v *Viewer) scroll(gtx layout.Context, d f32.Point, size image.Point) {
+	if d == (f32.Point{}) {
+		return
+	}
+	notch := easeNotch * gtx.Metric.PxPerDp
+	if max(d.X, -d.X) < notch && max(d.Y, -d.Y) < notch {
+		v.anim.on = false
+		v.Pan = v.scrolledPan(d, size)
+		gtx.Execute(op.InvalidateCmd{})
+		return
+	}
+	v.ease(gtx, func() { v.Pan = v.scrolledPan(d, size) })
+}
+
+// scrolledPan returns the pan after d px of scrolling.
+func (v *Viewer) scrolledPan(d f32.Point, size image.Point) f32.Point {
+	if v.Diagram == nil {
+		return v.Pan
+	}
+	return f32.Pt(
+		scrollAxis(v.Pan.X, d.X, v.Diagram.ViewBox.W*v.Zoom, float32(size.X)),
+		scrollAxis(v.Pan.Y, d.Y, v.Diagram.ViewBox.H*v.Zoom, float32(size.Y)),
+	)
+}
+
+// scrollAxis returns pan after d px of scrolling on one axis, for a diagram
+// length px long in a window win px long. Scrolling stops with the diagram's
+// edge fitPad inside the window, and doesn't move a diagram that fits. One
+// dragged further than that isn't pulled back, only kept from going further,
+// and one that fits is brought back into the window.
+func scrollAxis(pan, d, length, win float32) float32 {
+	lo, hi := win-length-fitPad, float32(fitPad)
+	if lo >= hi {
+		if pan >= hi && pan <= lo {
+			return pan
+		}
+		lo, hi = hi, lo
+	}
+	return min(max(pan-d, min(lo, pan)), max(hi, pan))
 }
 
 // StepZoom zooms by factor around the middle of the viewer, eased, at its
@@ -587,8 +632,15 @@ type drawingKey struct {
 // clickSlop is how far, in px, a press may move and still be a click.
 const clickSlop = 4
 
+// fitPad is the margin, in px, round a fitted diagram and past its edges
+// when scrolling.
+const fitPad = 32
+
 const (
-	// wheelStep is the zoom for a wheel's notch.
+	// easeNotch is the least scrolling, in dp, that's eased: half a notch
+	// in the IDE's browser, which gets 120 px for one.
+	easeNotch = 60
+	// wheelStep is the zoom for a Ctrl+wheel's notch.
 	wheelStep = 1.15
 	// wheelNotch is the scrolling, in dp, that zooms by wheelStep. A
 	// notch scrolls at least as far, 50 dp or more in the app and 120 px

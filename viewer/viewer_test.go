@@ -182,25 +182,27 @@ func TestViewerScrollZoomAndDragPan(t *testing.T) {
 	frame()
 	initialZoom := v.Zoom
 
-	// Test 1: Scroll UP -> Zoom in
+	// Test 1: Ctrl+scroll UP -> Zoom in
 	r.Queue(pointer.Event{
-		Kind:     pointer.Scroll,
-		Source:   pointer.Mouse,
-		Position: f32.Pt(400, 300),
-		Scroll:   f32.Pt(0, -100), // scroll up
+		Kind:      pointer.Scroll,
+		Source:    pointer.Mouse,
+		Position:  f32.Pt(400, 300),
+		Scroll:    f32.Pt(0, -100), // scroll up
+		Modifiers: key.ModCtrl,
 	})
 	frame()
 	if v.Zoom <= initialZoom {
 		t.Errorf("expected zoom to increase on scroll up, got %f <= %f", v.Zoom, initialZoom)
 	}
 
-	// Test 2: Scroll DOWN -> Zoom out
+	// Test 2: Ctrl+scroll DOWN -> Zoom out
 	zoomAfterZoomIn := v.Zoom
 	r.Queue(pointer.Event{
-		Kind:     pointer.Scroll,
-		Source:   pointer.Mouse,
-		Position: f32.Pt(400, 300),
-		Scroll:   f32.Pt(0, 100), // scroll down
+		Kind:      pointer.Scroll,
+		Source:    pointer.Mouse,
+		Position:  f32.Pt(400, 300),
+		Scroll:    f32.Pt(0, 100), // scroll down
+		Modifiers: key.ModCtrl,
 	})
 	frame()
 	if v.Zoom >= zoomAfterZoomIn {
@@ -425,6 +427,125 @@ func TestStepZoomAtTheMiddle(t *testing.T) {
 	}
 }
 
+// Scrolling moves the diagram the way the reading view moves its page, on
+// either axis, and leaves the zoom. Small steps move it at once.
+func TestScrollMovesTheDiagram(t *testing.T) {
+	v, r, frame := clockedViewer(t)
+	v.Zoom = 10
+	v.Pan = f32.Pt(-100, -100)
+	r.Queue(wheel(f32.Pt(0, 30), 0))
+	frame(10 * time.Millisecond)
+	if want := f32.Pt(-100, -130); !near(v.Pan, want) {
+		t.Errorf("scrolling down put the pan at %v, want %v", v.Pan, want)
+	}
+	r.Queue(wheel(f32.Pt(30, 0), 0))
+	frame(20 * time.Millisecond)
+	if want := f32.Pt(-130, -130); !near(v.Pan, want) {
+		t.Errorf("scrolling right put the pan at %v, want %v", v.Pan, want)
+	}
+	if v.Zoom != 10 {
+		t.Errorf("scrolling changed the zoom to %v", v.Zoom)
+	}
+}
+
+// Ctrl+scrolling zooms at the pointer and doesn't scroll as well.
+func TestCtrlScrollZoomsAtThePointer(t *testing.T) {
+	v, r, frame := clockedViewer(t)
+	v.Zoom, v.Pan = 10, f32.Pt(-100, -100)
+	r.Queue(wheel(f32.Pt(0, -wheelNotch), key.ModCtrl))
+	frame(10 * time.Millisecond)
+	if want := float32(10 * wheelStep); math.Abs(float64(v.Zoom-want)) > 1e-3 {
+		t.Errorf("a notch up zoomed to %v, want %v", v.Zoom, want)
+	}
+	// The diagram's point under the pointer stays there.
+	at := f32.Pt(400, 300)
+	if want := at.Sub(at.Sub(f32.Pt(-100, -100)).Mul(wheelStep)); !near(v.Pan, want) {
+		t.Errorf("the pan went to %v, want %v", v.Pan, want)
+	}
+}
+
+// A wheel's notch eases to where it goes, and quick ones add up.
+func TestWheelNotchEases(t *testing.T) {
+	v, r, frame := clockedViewer(t)
+	v.Zoom, v.Pan = 10, f32.Pt(-100, -100)
+	r.Queue(wheel(f32.Pt(0, 120), 0))
+	frame(10 * time.Millisecond)
+	frame(60 * time.Millisecond)
+	if v.Pan.Y >= -100 || v.Pan.Y <= -220 {
+		t.Errorf("part way through a notch the pan is at %v", v.Pan.Y)
+	}
+	r.Queue(wheel(f32.Pt(0, 120), 0))
+	frame(70 * time.Millisecond)
+	frame(500 * time.Millisecond)
+	if want := f32.Pt(-100, -340); !near(v.Pan, want) {
+		t.Errorf("two notches put the pan at %v, want %v", v.Pan, want)
+	}
+}
+
+// Scrolling stops at the diagram's edges, on each axis of its own.
+func TestScrollStopsAtTheEdges(t *testing.T) {
+	v, r, frame := clockedViewer(t)
+	v.Zoom = 10
+	w, h := v.Diagram.ViewBox.W*10, v.Diagram.ViewBox.H*10
+	v.Pan = f32.Pt(fitPad-10, fitPad-10)
+	r.Queue(wheel(f32.Pt(-50, -50), 0))
+	frame(10 * time.Millisecond)
+	if want := f32.Pt(fitPad, fitPad); !near(v.Pan, want) {
+		t.Errorf("scrolling past the top left put the pan at %v, want %v", v.Pan, want)
+	}
+	v.Pan = f32.Pt(800-w-fitPad+10, 600-h-fitPad+10)
+	r.Queue(wheel(f32.Pt(50, 50), 0))
+	frame(20 * time.Millisecond)
+	if want := f32.Pt(800-w-fitPad, 600-h-fitPad); !near(v.Pan, want) {
+		t.Errorf("scrolling past the bottom right put the pan at %v, want %v", v.Pan, want)
+	}
+}
+
+// A diagram fitted to the window has nothing to scroll.
+func TestScrollLeavesAFittedDiagram(t *testing.T) {
+	v, r, frame := clockedViewer(t)
+	pan := v.Pan
+	r.Queue(wheel(f32.Pt(30, 30), 0))
+	frame(10 * time.Millisecond)
+	r.Queue(wheel(f32.Pt(0, 120), 0))
+	frame(20 * time.Millisecond)
+	frame(500 * time.Millisecond)
+	if !near(v.Pan, pan) {
+		t.Errorf("scrolling moved a fitted diagram from %v to %v", pan, v.Pan)
+	}
+}
+
+func TestScrollAxis(t *testing.T) {
+	const win, long, short = 600, 1000, 200
+	tests := []struct {
+		name           string
+		pan, d, length float32
+		want           float32
+	}{
+		{"moves back as it scrolls", -100, 50, long, -150},
+		{"stops at the far edge", win - long - fitPad + 10, 50, long, win - long - fitPad},
+		{"stops at the near edge", fitPad - 10, -50, long, fitPad},
+		{"dragged past the far edge stays", -2000, 50, long, -2000},
+		{"dragged past the far edge comes back", -2000, -50, long, -1950},
+		{"dragged past the near edge stays", 900, -50, long, 900},
+		{"dragged past the near edge comes back", 900, 50, long, 850},
+		{"fits: stays", 100, 50, short, 100},
+		{"fits, off the top: comes back", -100, -50, short, -50},
+		{"fits, off the bottom: comes back", 900, 50, short, 850},
+		{"fits, nearly back: stops inside", 20, -50, short, 70},
+	}
+	for _, tt := range tests {
+		if got := scrollAxis(tt.pan, tt.d, tt.length, win); got != tt.want {
+			t.Errorf("%s: scrollAxis(%v, %v, %v, %v) = %v, want %v", tt.name, tt.pan, tt.d, tt.length, float32(win), got, tt.want)
+		}
+	}
+}
+
+// wheel is d px of scrolling at the middle of the window.
+func wheel(d f32.Point, mods key.Modifiers) pointer.Event {
+	return pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: f32.Pt(400, 300), Scroll: d, Modifiers: mods}
+}
+
 // The wheel cuts an easing short: it zooms from what's shown.
 func TestWheelStopsTheEasing(t *testing.T) {
 	v, r, frame := clockedViewer(t)
@@ -432,7 +553,7 @@ func TestWheelStopsTheEasing(t *testing.T) {
 	frame(10 * time.Millisecond)
 	frame(60 * time.Millisecond)
 	shown := v.Zoom
-	r.Queue(pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: f32.Pt(400, 300), Scroll: f32.Pt(0, -wheelNotch)})
+	r.Queue(wheel(f32.Pt(0, -wheelNotch), key.ModCtrl))
 	frame(70 * time.Millisecond)
 	frame(500 * time.Millisecond)
 	if want := shown * wheelStep; math.Abs(float64(v.Zoom-want)) > 1e-4 {
