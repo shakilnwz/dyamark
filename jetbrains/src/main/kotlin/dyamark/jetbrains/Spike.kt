@@ -11,7 +11,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.util.concurrency.AppExecutorUtil
-import org.intellij.plugins.markdown.settings.MarkdownSettings
 import com.intellij.openapi.wm.IdeFocusManager
 import java.awt.KeyboardFocusManager
 import java.awt.Toolkit
@@ -169,7 +168,7 @@ class SpikeStartup : ProjectActivity {
     override suspend fun execute(project: Project) {
         if (!Spike.enabled) return
         ApplicationManager.getApplication().invokeLater {
-            val settings = MarkdownSettings.getInstance(project)
+            val settings = markdownSettings(project)
             settings.previewPanelProviderInfo = DyamarkPanelProvider.INFO
             settings.splitLayout = TextEditorWithPreview.Layout.SHOW_EDITOR_AND_PREVIEW
             val f = project.guessProjectDir()?.findChild("spike.md") ?: return@invokeLater

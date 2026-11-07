@@ -1,5 +1,6 @@
 package dyamark.jetbrains
 
+import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
@@ -16,7 +17,7 @@ private val LOG = logger<DyamarkProviderSwitchListener>()
  * then notes the chosen one. So the change that switches providers keeps
  * every open preview as it was, and only a later change of any Markdown
  * setting swaps them. This tells the listeners once more, with nothing
- * changed.
+ * changed. The IDE swaps them itself from build 263, so there it does nothing.
  */
 class DyamarkProviderSwitchListener(private val project: Project) : MarkdownSettings.ChangeListener {
     private var before: String? = null
@@ -29,7 +30,7 @@ class DyamarkProviderSwitchListener(private val project: Project) : MarkdownSett
         val after = settings.previewPanelProviderInfo.className
         val switched = before != null && before != after
         before = null
-        if (!switched) return
+        if (!switched || ApplicationInfo.getInstance().build.baselineVersion >= 263) return
         LOG.info("dyamark: the Markdown preview is now $after; swapping the open previews")
         ApplicationManager.getApplication().invokeLater({ settings.update { } }, project.disposed)
     }

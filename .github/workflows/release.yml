@@ -64,6 +64,10 @@ jobs:
           mkdir -p dist
           ./bin/plugin
 
+      - name: Verify the plugin against PhpStorm's newest releases
+        working-directory: jetbrains
+        run: VERSION="${GITHUB_REF_NAME#v}" ./gradlew verifyPlugin
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

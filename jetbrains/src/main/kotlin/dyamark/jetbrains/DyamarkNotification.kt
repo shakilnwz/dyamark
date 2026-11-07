@@ -11,7 +11,6 @@ import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.vfs.VirtualFile
-import org.intellij.plugins.markdown.settings.MarkdownSettings
 import org.intellij.plugins.markdown.ui.preview.MarkdownHtmlPanelProvider
 
 private val LOG = logger<DyamarkNotification>()
@@ -36,7 +35,7 @@ object DyamarkNotification {
     fun shouldNotify(project: Project): Boolean {
         if (project.isDisposed) return false
         val shown = PropertiesComponent.getInstance().getBoolean(SHOWN_PROPERTY, false)
-        val current = MarkdownSettings.getInstance(project).previewPanelProviderInfo
+        val current = markdownSettings(project).previewPanelProviderInfo
         return shouldNotify(shown, current)
     }
 
@@ -60,7 +59,7 @@ object DyamarkNotification {
 
         notification.addAction(NotificationAction.createSimpleExpiring("Use Dyamark") {
             if (!project.isDisposed) {
-                val settings = MarkdownSettings.getInstance(project)
+                val settings = markdownSettings(project)
                 settings.update {
                     it.previewPanelProviderInfo = DyamarkPanelProvider.INFO
                 }

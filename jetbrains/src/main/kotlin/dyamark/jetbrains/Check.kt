@@ -3,6 +3,7 @@ package dyamark.jetbrains
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.notification.Notification
 import com.intellij.notification.Notifications
+import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.PathManager
@@ -22,7 +23,6 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.wm.WindowManager
 import com.intellij.ui.ColorUtil
-import org.intellij.plugins.markdown.settings.MarkdownSettings
 import org.intellij.plugins.markdown.ui.preview.MarkdownEditorWithPreview
 import org.intellij.plugins.markdown.ui.preview.MarkdownHtmlPanelProvider
 import java.awt.Color
@@ -79,13 +79,14 @@ object Check {
     }
 
     private fun run(project: Project) {
+        note("IDE: ${ApplicationInfo.getInstance().build.asString()}")
         DumbService.getInstance(project).waitForSmartMode()
         val dir = edt { project.guessProjectDir() } ?: error("no project directory")
         val checkMd = dir.findChild("check.md") ?: error("no check.md")
         val apiMd = dir.findChild("api.md") ?: error("no api.md")
         val notifyMd = dir.findChild("notify.md") ?: error("no notify.md")
         val files = FileEditorManager.getInstance(project)
-        val settings = MarkdownSettings.getInstance(project)
+        val settings = markdownSettings(project)
         edt {
             PropertiesComponent.getInstance().setValue(DyamarkNotification.SHOWN_PROPERTY, true)
             settings.previewPanelProviderInfo = DyamarkPanelProvider.INFO
@@ -200,7 +201,7 @@ object Check {
             WebResources.INDEX, 0,
         )
         val fps = waitFor(m, 5000) { it.panel === panel && it.text.startsWith("in log fps ") }?.text?.substringAfterLast(' ')?.toIntOrNull()
-        result(fps != null && fps >= 50, 6, "the preview draws at 60 fps, not Chromium's off-screen 30", "$fps frames in a second")
+        result(fps != null && fps >= 50, 6, "the preview draws at 60 fps or more, not Chromium's off-screen 30", "$fps frames in a second")
         panel.cefBrowser.executeJavaScript(
             "addEventListener('wheel', (e) => dyamarkSend('log wheel ' + e.deltaY + ' mode ' + e.deltaMode + ' dpr ' + devicePixelRatio)," +
                 " { capture: true, passive: true });",
@@ -245,8 +246,12 @@ object Check {
 
             edt { ed.scrollingModel.scrollVertically(0) }
             pause(1500)
+            // Back at the top the page can sit some px from where it was, so
+            // the link is found again.
+            val again = shot(panel.uiForCheck, "check-links-again")
+            val relative = accentRows(again.image, Color.decode(accentOf(edt { colors.globalScheme }))).getOrNull(1) ?: links[1]
             m = mark()
-            click(panel, links[1], page.scale)
+            click(panel, relative, again.scale)
             val link = waitFor(m, 3000) { it.panel === panel && it.text.startsWith("in link ") }
             result(link?.text == "in link api.md", 6, "a relative link is sent to the IDE", link?.text ?: "nothing")
             val opened = waitUntil(5000) { edt { files.selectedFiles.firstOrNull() } == apiMd }
@@ -266,6 +271,30 @@ object Check {
         val ui = panel.uiForCheck
         click(panel, Rectangle(ui.width / 2 - 1, 70, 2, 2), 1.0)
         pause(1000)
+
+        // The wheel in the viewer: with Ctrl it zooms, without it moves the
+        // zoomed diagram, and the page under the viewer stays where it is.
+        panel.cefBrowser.executeJavaScript(
+            "addEventListener('wheel', (e) => dyamarkSend('log viewer wheel ctrl ' + e.ctrlKey), { capture: true, passive: true });",
+            WebResources.INDEX, 0,
+        )
+        pause(300)
+        val fitted = shot(ui, "check-viewer-fitted").image
+        val wheeled = mark()
+        wheel(panel, notches = 6, rotation = -1, modifiers = InputEvent.CTRL_DOWN_MASK)
+        val ctrl = waitFor(wheeled, 2000) { it.panel === panel && it.text.startsWith("in log viewer wheel ctrl ") }?.text?.substringAfterLast(' ')
+        result(ctrl == "true", 6, "Ctrl+wheel in the viewer reaches the page with Ctrl held", "ctrlKey $ctrl")
+        pause(600)
+        val zoomed = shot(ui, "check-viewer-zoomed").image
+        val zoomedPx = changed(fitted, zoomed)
+        result(zoomedPx > 500, 6, "and zooms the diagram", "$zoomedPx px changed")
+        wheel(panel, notches = 3)
+        pause(600)
+        val movedPx = changed(zoomed, shot(ui, "check-viewer-moved").image)
+        result(movedPx > 500, 6, "the plain wheel moves the zoomed diagram", "$movedPx px changed")
+        val under = since(wheeled).filter { it.panel === panel && it.text.startsWith("in scroll ") }
+        result(under.isEmpty(), 6, "and the page under the viewer doesn't scroll", under.joinToString { it.text })
+
         // Keys and focus need the IDE's window to be the desktop's active
         // one, which the person at the desktop can take away.
         val active = waitUntil(10_000) { edt { activate(project) } }
@@ -302,8 +331,10 @@ object Check {
         edt { files.openFile(apiMd, false) }
         pause(800)
         edt { settings.update { it.previewPanelProviderInfo = jcef } }
-        val swapped = waitUntil(8000) { ThemeBridge.openPanels().isEmpty() }
-        result(swapped, 7, "choosing ${jcef.name} swaps dyamark's preview out", "${ThemeBridge.openPanels().size} dyamark panels left")
+        val swapped = waitUntil(8000) { ThemeBridge.openPanels().none { it.virtualFile == apiMd } }
+        result(swapped, 7, "choosing ${jcef.name} swaps the shown preview out", "${ThemeBridge.openPanels().size} dyamark panels left")
+        // Since 263 the IDE only swaps a preview that's showing; 262 swaps them all.
+        note("dyamark panels left in hidden tabs: ${ThemeBridge.openPanels().mapNotNull { it.virtualFile?.name }}")
 
         val shownNotes = CopyOnWriteArrayList<Notification>()
         val connection = project.messageBus.connect()
@@ -332,8 +363,7 @@ object Check {
             val back = waitFor(m, 20_000) { it.panel.virtualFile == apiMd && it.text == "in drawn" }
             result(back != null, 7, "and swaps the open preview (api.md) back to dyamark")
             edt { files.openFile(checkMd, true) }
-            val next = waitFor(m, 20_000) { it.panel.virtualFile == checkMd && it.text == "in drawn" }
-            result(next != null, 7, "and the next one shown (check.md) is dyamark's too")
+            result(waitUntil(20_000) { live(checkMd) != null }, 7, "and the next one shown (check.md) is dyamark's too")
         } finally {
             Disposer.dispose(connection)
         }
@@ -454,6 +484,15 @@ object Check {
         return n
     }
 
+    /** How many pixels differ between two images of one size. */
+    private fun changed(a: BufferedImage, b: BufferedImage): Int {
+        var n = 0
+        for (y in 0 until minOf(a.height, b.height)) for (x in 0 until minOf(a.width, b.width)) {
+            if (a.getRGB(x, y) != b.getRGB(x, y)) n++
+        }
+        return n
+    }
+
     /** The rows of text in [color] in the top half of [image], top first. */
     private fun accentRows(image: BufferedImage, color: Color): List<Rectangle> {
         val rows = ArrayList<Rectangle>()
@@ -508,14 +547,14 @@ object Check {
         queue.postEvent(MouseEvent(target, MouseEvent.MOUSE_CLICKED, now + 180, 0, x, y, 1, false, MouseEvent.BUTTON1))
     }
 
-    private fun wheel(panel: DyamarkPanel, notches: Int) {
+    private fun wheel(panel: DyamarkPanel, notches: Int, rotation: Int = 1, modifiers: Int = 0) {
         val target = panel.uiForCheck
         val queue = Toolkit.getDefaultToolkit().systemEventQueue
         val x = target.width / 2
         val y = target.height / 2
         repeat(notches) {
-            queue.postEvent(MouseWheelEvent(target, MouseEvent.MOUSE_WHEEL, System.currentTimeMillis(), 0, x, y, 0, false,
-                MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, 1))
+            queue.postEvent(MouseWheelEvent(target, MouseEvent.MOUSE_WHEEL, System.currentTimeMillis(), modifiers, x, y, 0, false,
+                MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, rotation))
             pause(60)
         }
     }

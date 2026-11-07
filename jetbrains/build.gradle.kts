@@ -1,3 +1,6 @@
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+import org.jetbrains.intellij.platform.gradle.models.ProductRelease
+
 plugins {
     id("org.jetbrains.kotlin.jvm") version "2.4.21"
     id("org.jetbrains.intellij.platform") version "2.19.0"
@@ -15,16 +18,20 @@ repositories {
     }
 }
 
+// The IDE installed here, if gradle.properties names one. Without it, as in
+// CI, the plugin is built against the oldest PhpStorm it supports.
+val localIde = providers.gradleProperty("dyamark.ide").orNull?.let { file(it) }?.takeIf { it.isDirectory }
+
 dependencies {
     intellijPlatform {
-        val localIde = providers.gradleProperty("dyamark.ide").orNull?.let { file(it) }
-        if (localIde != null && localIde.isDirectory) {
+        if (localIde != null) {
             local(localIde)
         } else {
             phpstorm("2026.2.4")
         }
         bundledPlugin("org.intellij.plugins.markdown")
         bundledPlugin("com.intellij.modules.jcef")
+        pluginVerifier()
     }
     testImplementation(kotlin("test"))
 }
@@ -39,7 +46,23 @@ intellijPlatform {
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "262"
-            untilBuild = "262.*"
+            // No upper limit: the plugin keeps loading as PhpStorm updates.
+            untilBuild = provider { null }
+        }
+    }
+    // verifyPlugin: against the IDE installed here, or in CI against the
+    // newest release of each PhpStorm line the plugin supports.
+    pluginVerification {
+        ides {
+            if (localIde != null) {
+                local(localIde)
+            } else {
+                select {
+                    types = listOf(IntelliJPlatformType.PhpStorm)
+                    channels = listOf(ProductRelease.Channel.RELEASE)
+                    sinceBuild = "262"
+                }
+            }
         }
     }
 }
