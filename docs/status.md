@@ -1,7 +1,7 @@
 # Status
 
 Where dyamark stands against [the plan](plan.md), phase by phase.
-Last updated 2026-11-03, at v1.4.0.
+Last updated 2026-11-07, at v1.5.0.
 
 | Phase | | State |
 |---|---|---|
@@ -115,6 +115,15 @@ smooth: 60 fps instead of JCEF's off-screen 30, eased wheel scrolling,
 cached diagrams, eased zoom in the viewer, text zoom that keeps the
 place, and scroll sync in fractions of a line. Not checked yet: the zip
 installed into a clean PhpStorm, and a touchpad in the IDE.
+
+v1.5.0: in the viewer, scrolling moves the diagram
+and Ctrl+scrolling zooms it, in the app and the plugin. Scrolling a document
+is smoother: notches ease on a critically damped spring, now in the app too,
+and in the plugin the editor only follows the newest place. The plugin has no
+upper version limit and works on 2026.3 (build 263). All 37 checks of
+`./gradlew runIde -Pcheck` pass on 2026.2.4 and 2026.3, and the Plugin
+Verifier finds the zip built against 2026.2.4 compatible with both. The
+verifier now runs in the release workflow and every week.
 
 ## Planned next
 

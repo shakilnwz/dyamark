@@ -174,6 +174,23 @@ What the run found and changed:
 - A colour scheme change rebuilds the preview: the Markdown plugin
   disposes the panel and makes a new one.
 
+## Checked in PhpStorm 2026.3 (2026-11-07)
+
+v1.4.0 was pinned to build 262, so the update to 2026.3 turned it off. The
+pin is gone, and the checks pass on both builds. What 2026.3 changed:
+
+- **`MarkdownSettings` moved from the project to the application**, with its
+  change topic. `getInstance()` isn't in 262 and `getInstance(project)` is
+  deprecated in 263, so `markdownSettings(project)` asks for the service
+  where each build keeps it.
+- **Choosing another preview now swaps the open one by itself.** The bug
+  `DyamarkProviderSwitchListener` works around is fixed, so it does nothing
+  from 263 on.
+- **Only a preview that's showing swaps.** A hidden tab keeps its panel until
+  it's reopened, or until a setting changes while it's showing. This is the
+  same for every provider, and working around it would lean on more of the
+  plugin's internals, so it stays.
+
 ## Decisions
 
 - **The IDE edits, dyamark draws.** The wasm build has no editor,
@@ -376,8 +393,10 @@ both Gio and IntelliJ plugins, the whole plan is more like 4–6 days.
   `Tab` may be taken by IDE actions. The ones that are get IDE actions
   of their own that forward to the preview, or are dropped.
 - **Experimental API.** The provider and panel interfaces may change in
-  2026.3 and later. Pin `until-build` to the tested major, and run the
-  Plugin Verifier against each new release before widening it.
+  2026.3 and later. v1.4.0 pinned `until-build` to the tested major, which
+  turned the plugin off at the update to 2026.3. So there's no upper limit
+  now, and the Plugin Verifier runs in the release workflow and every week
+  instead (`.github/workflows/phpstorm-compat.yml`).
 - **Memory.** Each preview has its own wasm instance (Go heap about
   10 MB plus the module) in a renderer process the IDE shares. Measure in
   step 1. If it's too much with many tabs, dispose hidden previews'

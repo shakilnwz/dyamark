@@ -73,6 +73,8 @@ dyamark notes.md
 | `Ctrl+\` | Source and view side by side |
 | `Tab` / `Shift+Tab` | Move between diagrams |
 | `Enter` / click | Open the diagram viewer |
+| Scroll / `Shift`+scroll | Move the diagram up and down / sideways (viewer) |
+| `Ctrl`+scroll | Zoom at the pointer (viewer) |
 | `+` `-` `0` `1` `W` `H` | Zoom, fit, 100 %, fit width / height (viewer) |
 | `N` | Toggle sequence numbers (viewer) |
 | `E` | Edit this diagram's source (viewer) |
@@ -83,9 +85,9 @@ dyamark notes.md
 
 ## JetBrains plugin
 
-A Markdown preview for PhpStorm 2026.2 (and other IntelliJ-based IDEs on the
-same build), with the same diagrams and viewer, colours from the editor
-scheme, and scroll sync.
+A Markdown preview for PhpStorm 2026.2 and newer (and other IntelliJ-based
+IDEs on those builds), with the same diagrams and viewer, colours from the
+editor scheme, and scroll sync.
 
 1. Download `dyamark-jetbrains-<version>.zip` from the
    [latest release](https://github.com/shakilnwz/dyamark/releases/latest).
@@ -94,10 +96,11 @@ scheme, and scroll sync.
 
 ### Requirements
 
-- **PhpStorm 2026.2** (build 262). Other IntelliJ-based IDEs on 2026.2
-  should work, but only PhpStorm is tested. The plugin is pinned to 262
-  because the Markdown preview API it uses is experimental, so 2026.3
-  needs a new release.
+- **PhpStorm 2026.2 or newer** (build 262 and up). Other IntelliJ-based IDEs
+  should work, but only PhpStorm is tested. The plugin sets no upper version,
+  so it keeps loading as PhpStorm updates. The Markdown preview API it uses
+  is experimental, so an update can still break it; a weekly check against
+  PhpStorm's newest releases is there to catch that.
 - The bundled **Markdown** plugin, enabled.
 - **JCEF**, which the IDE's default runtime (JetBrains Runtime) has.
 - **WebGL**, so leave the IDE's browser GPU on (the default). If
@@ -109,12 +112,16 @@ scheme, and scroll sync.
 ### Using it
 
 - Switch previews under **Settings › Languages & Frameworks › Markdown ›
-  Preview**, or with the one-time **Use Dyamark** notification.
+  Preview**, or with the one-time **Use Dyamark** notification. From 2026.3
+  the choice is for the whole IDE, and only the tab showing swaps at once;
+  other open tabs follow when you reopen them.
 - The keys are the desktop app's; `?` lists them. **Ctrl+=**, **Ctrl+-**
-  and **Ctrl+0** zoom the focused preview, and **E** in the
-  diagram viewer puts the caret on the diagram's source.
-- The preview draws at 60 fps. Set `ide.browser.jcef.osr.framerate` in
-  the Registry to change it.
+  and **Ctrl+0** zoom the focused preview. In the diagram viewer, scrolling
+  moves the diagram, **Ctrl**+scrolling zooms it, and **E** puts the caret on
+  the diagram's source.
+- The preview draws at 60 fps on 2026.2 and 120 fps from 2026.3. Set
+  `ide.browser.jcef.osr.framerate` in the Registry to change it; a lower
+  rate is less smooth but leaves the IDE more room.
 - Only sequence diagrams are drawn; other Mermaid types show as source.
 - Text is drawn with the bundled Liberation fonts, so scripts they don't
   cover, such as CJK, show as boxes.

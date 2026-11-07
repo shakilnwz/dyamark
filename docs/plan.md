@@ -190,10 +190,10 @@ declarations may go inside a `box`.
   re-laid out after an 80 ms debounce. Only the diagram that changed is
   parsed and laid out again; the rest are cached by source hash.
 - **Diagram viewer:** `Enter` on a focused diagram, or a click, opens it
-  fullscreen. Scroll zooms at the pointer, drag pans, `0` fits, `1` is
-  100 %, `W` / `H` fit width / height, `[` / `]` go to the previous / next
-  diagram, `N` toggles sequence numbers, `E` jumps into the source at that
-  diagram, and `Esc` closes.
+  fullscreen. Scroll moves the diagram, Ctrl+scroll zooms at the pointer,
+  drag pans, `0` fits, `1` is 100 %, `W` / `H` fit width / height, `[` / `]`
+  go to the previous / next diagram, `N` toggles sequence numbers, `E` jumps
+  into the source at that diagram, and `Esc` closes.
 - **Sticky participants:** in a tall diagram the participants' names stay
   pinned at the top of the viewer while scrolling, in a strip of the same
   small height at any zoom, each name over its lifeline and cut short to
