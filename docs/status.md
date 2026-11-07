@@ -1,7 +1,7 @@
 # Status
 
 Where dyamark stands against [the plan](plan.md), phase by phase.
-Last updated 2026-11-07, at v1.5.0.
+Last updated 2026-11-07, at v1.5.1.
 
 | Phase | | State |
 |---|---|---|
@@ -124,6 +124,10 @@ upper version limit and works on 2026.3 (build 263). All 37 checks of
 `./gradlew runIde -Pcheck` pass on 2026.2.4 and 2026.3, and the Plugin
 Verifier finds the zip built against 2026.2.4 compatible with both. The
 verifier now runs in the release workflow and every week.
+
+v1.5.1 is the first release of all that. v1.5.0 was tagged but never
+published: the new verifier step stopped it over an internal API call in the
+check harness, which is gone now.
 
 ## Planned next
 
